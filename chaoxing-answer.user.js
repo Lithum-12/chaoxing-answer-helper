@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通自动答题助手 Next
 // @namespace    https://github.com/chaoxing-helper
-// @version      4.6.2
+// @version      5.0.3
 // @description  抓取学习通题目，调用 AI 自动答题
 // @author       chaoxing-helper
 // @match        *://*.chaoxing.com/*
@@ -36,11 +36,15 @@
 
 
     /* 脚本版本号：每次改动在此递增，并在 @version 头同步 */
-    var VERSION = "4.6.2";
+    var VERSION = "5.0.3";
 
     var DELAY_MS = parseInt(GM_getValue("cx_delay", 1500), 10);
     var MAX_TOKENS = parseInt(GM_getValue("cx_maxtokens", 2048), 10);
     var TEMP = parseFloat(GM_getValue("cx_temp", 0.3));
+    /* 答题模式：independent(逐题独立) | session(累积会话) | batch(整卷批量) */
+    var SESSION_MODE = GM_getValue("cx_session_mode", "independent");
+    var SESSION_MODEL = GM_getValue("cx_session_model", "deepseek-chat");
+    var SESSION = { messages: null };
     var isRunning = false;
     var answeredCount = 0;
     var totalQuestions = 0;
@@ -184,7 +188,7 @@
             /* 设计令牌 · 原插件蓝灰配色（弹窗用） */
             "#cx-launcher,#cx-stats-modal{--cx-brand:#58a6ff;--cx-brand-t:#7cb8f0;--cx-brand-rgb:88,166,255;--cx-alt:#3fb950;--cx-alt-t:#56d364;--cx-alt-rgb:63,185,80;--cx-pop:#f85149;--cx-pop-t:#ff7b72;--cx-pop-rgb:248,81,73;--cx-purple:#bc8cff;--cx-gold:#d29922;--cx-panel:#0d1117;--cx-panel-2:#161b22;--cx-panel-deep:#161b22;--cx-ink:#e6edf3;--cx-ink-2:#8b949e;--cx-mut:#8b949e;--cx-line:#30363d;--cx-line-soft:#21262d;--cx-brand-tint:rgba(88,166,255,.12);--cx-brand-line:rgba(88,166,255,.4);--cx-alt-tint:rgba(63,185,80,.12);--cx-alt-line:rgba(63,185,80,.4);--cx-r:10px;--cx-r-sm:8px;--cx-r-xs:6px;--cx-sans:-apple-system,'PingFang SC','Microsoft YaHei',system-ui,sans-serif;--cx-serif:var(--cx-sans);--cx-mono:var(--cx-sans);}",
             /* 悬浮按钮 · 向下整块弹出 */
-            "#cx-launcher{position:fixed;top:80px;right:20px;z-index:999999;color-scheme:light;font-family:var(--cx-sans);display:flex;flex-direction:column;align-items:flex-end;gap:8px;}",
+            "#cx-launcher{position:fixed;top:80px;right:20px;z-index:999999;color-scheme:light;font-family:var(--cx-sans);display:block;}",
             "#cx-launcher *{box-sizing:border-box;margin:0;}",
             "#cx-fab{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#4A90D9,#357ABD);color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;box-shadow:0 6px 18px rgba(53,122,189,.4);position:relative;user-select:none;flex-shrink:0;transition:transform .18s;}",
             "#cx-fab:hover{transform:translateY(-2px);}",
@@ -196,8 +200,13 @@
             "#cx-dot.ok{background:#28a745;}#cx-dot.warn{background:#ffc107;}#cx-dot.err{background:#e74c3c;}",
             "#cx-launcher.running #cx-dot{animation:cx-pulse 1.6s infinite;}",
             "@keyframes cx-pulse{0%{box-shadow:0 0 0 0 rgba(74,144,217,.5)}70%{box-shadow:0 0 0 8px rgba(74,144,217,0)}100%{box-shadow:0 0 0 0 rgba(74,144,217,0)}}",
-            "#cx-menu{display:none;width:218px;background:#fff;border:1px solid #e6eaf0;border-radius:14px;box-shadow:0 14px 38px rgba(20,40,70,.18);padding:8px;color:#334;}",
-            "#cx-launcher:hover #cx-menu,#cx-launcher.pinned #cx-menu{display:block;animation:cx-menu-in .16s ease;}",
+            "#cx-menu{display:none;position:absolute;right:0;top:calc(100% + 8px);width:218px;background:#fff;border:1px solid #e6eaf0;border-radius:14px;box-shadow:0 14px 38px rgba(20,40,70,.18);padding:8px;color:#334;}",
+            "#cx-menu::before{content:'';position:absolute;left:0;right:0;top:-10px;height:10px;}",
+            "#cx-launcher.up #cx-menu::before{top:auto;bottom:-10px;}",
+            "#cx-launcher.up #cx-menu{top:auto;bottom:calc(100% + 8px);}",
+            "#cx-launcher.open #cx-menu,#cx-launcher.pinned #cx-menu{display:block;animation:cx-menu-in .16s ease;}",
+            "#cx-launcher.up #cx-menu{animation-name:cx-menu-in-up;}",
+            "@keyframes cx-menu-in-up{from{opacity:0;transform:translateY(6px)}}",
             "@keyframes cx-menu-in{from{opacity:0;transform:translateY(-6px)}}",
             "#cx-menu .m-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px 8px;margin-bottom:4px;border-bottom:1px solid #eef1f5;}",
             "#cx-menu .m-title{font-size:12.5px;font-weight:700;color:#2b3440;letter-spacing:.02em;}",
@@ -409,7 +418,48 @@
             });
         })();
 
+        /* ===== 悬停展开；下方空间不足时向上弹出；带关闭延迟便于划过间隙 ===== */
+        (function() {
+            var MENU_H = 260, closeTimer = null;
+            function evalFlip() {
+                var r = panel.getBoundingClientRect();
+                if (r.bottom + MENU_H > window.innerHeight && r.top > MENU_H) panel.classList.add("up");
+                else panel.classList.remove("up");
+            }
+            function openMenu() {
+                if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+                evalFlip();
+                panel.classList.add("open");
+            }
+            function scheduleClose() {
+                if (panel.classList.contains("pinned")) return;
+                if (closeTimer) clearTimeout(closeTimer);
+                closeTimer = setTimeout(function() { panel.classList.remove("open"); closeTimer = null; }, 260);
+            }
+            panel.addEventListener("mouseenter", openMenu);
+            panel.addEventListener("mouseleave", scheduleClose);
+            /* 钉住或拖拽后也校正方向 */
+            panel.addEventListener("mouseup", function() { if (panel.classList.contains("pinned")) evalFlip(); });
+        })();
+
         log("脚本加载成功");
+    }
+
+    /* ===== 生成按厂商分组的 <option> 列表（供会话模型下拉复用） ===== */
+    function makeModelOptions(current) {
+        var out = "";
+        for (var pi = 0; pi < PROVIDER_ORDER.length; pi++) {
+            var pid = PROVIDER_ORDER[pi];
+            var pname = PROVIDER_CONFIG[pid] ? PROVIDER_CONFIG[pid].name : pid;
+            var models = MODEL_LIST.filter(function(m) { return (MODEL_PROVIDER_MAP[m] || "deepseek") === pid; });
+            if (!models.length) continue;
+            out += '<optgroup label="' + pname + '">';
+            for (var mi = 0; mi < models.length; mi++) {
+                out += '<option value="' + models[mi] + '"' + (models[mi] === current ? " selected" : "") + '>' + models[mi] + '</option>';
+            }
+            out += '</optgroup>';
+        }
+        return out;
     }
 
     /* ===== 生成题型模型选择 HTML（按厂商分组，厂商高亮） ===== */
@@ -508,7 +558,7 @@
                 "#cx-stats-modal .ni:hover{background:var(--cx-brand-tint);color:var(--cx-ink);transform:translateX(2px)}",
                 "#cx-stats-modal .ni.on{background:var(--cx-brand-tint);border-color:var(--cx-brand-line);color:var(--cx-brand-t)}",
                 "#cx-stats-modal .ni.on::before{content:'';position:absolute;left:-1px;top:22%;bottom:22%;width:3px;background:var(--cx-brand);border-radius:2px}",
-                "#cx-stats-modal .main{flex:1;min-width:0;overflow:auto;padding:16px}",
+                "#cx-stats-modal .main{flex:1;min-width:0;min-height:0;overflow:auto;padding:16px}",
                 "#cx-stats-modal .main::-webkit-scrollbar{width:8px}",
                 "#cx-stats-modal .main::-webkit-scrollbar-thumb{background:rgba(203,203,203,.28);border-radius:4px}",
                 "#cx-stats-modal .tab{display:none}",
@@ -526,7 +576,7 @@
                 "#cx-stats-modal .srr:last-child{border-bottom:none}",
                 "#cx-stats-modal .srr .lab{font-size:13px;font-weight:600;color:var(--cx-ink)}",
                 "#cx-stats-modal .srr .d{font-size:11px;color:var(--cx-mut);margin-top:2px}",
-                "#cx-stats-modal .srr .rec{display:inline;color:var(--cx-alt-t);font-size:13px;margin-left:2px;cursor:help;vertical-align:baseline}",
+                "#cx-stats-modal .rec{display:inline;color:var(--cx-alt-t);font-size:13px;margin-left:2px;cursor:help;vertical-align:baseline}",
                 "#cx-stats-modal .srr .ctl{flex:none;display:flex;align-items:center;gap:8px}",
                 "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:7px 10px;font-family:var(--cx-sans);font-size:13px}",
                 "#cx-stats-modal .srr select:focus,#cx-stats-modal .srr input:focus{border-color:var(--cx-brand);outline:none;box-shadow:0 0 0 3px var(--cx-brand-tint)}",
@@ -661,7 +711,8 @@
             + makeProviderKeyInputs()
             + '<div class="fx" style="margin-top:8px"><button class="bt primary" id="cx-save-keys">保存 Key</button></div>'
             + '</div></div>'
-            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型</div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
+            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型 <span class="rec" title="为每种题型分别指定模型；仅在“逐题独立”模式下生效。判断题/单选题可用便宜模型，简答题用更强的模型">ⓘ</span></div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
+            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">会话模型 <span class="rec" title="累积会话 / 整卷批量模式下整卷统一用这一个模型（缓存按模型分，需固定）">ⓘ</span></div><div class="pb" style="padding:8px 14px"><div class="ms-row"><span class="l">整卷统一</span><select id="cx-s-sessmodel">' + makeModelOptions(SESSION_MODEL) + '</select></div></div></div>'
             + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">接口说明</div><div class="pb" style="padding:10px 14px;font-size:12px;line-height:1.8;color:var(--cx-mut)">'
             + '• 本脚本按 <b style="color:var(--cx-ink)">OpenAI 兼容格式</b>（<code style="color:var(--cx-alt-t)">/chat/completions</code>）调用。<br>'
             + '• DeepSeek / OpenAI / 通义千问 / 智谱 / 月之暗面 官方即兼容，可直接填官方 Key。<br>'
@@ -673,6 +724,7 @@
             + '<div class="srr"><div><div class="lab">答题间隔 <span class="rec" title="建议 1500–3000 毫秒：太快容易被平台限流，太慢耗时">ⓘ</span></div><div class="d">答完一题后，等待多久再做下一题</div></div><div class="ctl"><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
             + '<div class="srr"><div><div class="lab">最大 Token <span class="rec" title="建议 2048；简答题等长答案可提高到 4096">ⓘ</span></div><div class="d">AI 单次回答的最大长度，设太小答案会被截断</div></div><div class="ctl"><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
             + '<div class="srr"><div><div class="lab">温度 Temperature <span class="rec" title="建议 0.3：数值越低回答越稳定确定，越高越发散有创意">ⓘ</span></div><div class="d">控制回答的随机性，答题建议用低值</div></div><div class="ctl"><input type="number" id="cx-s-temp" min="0" max="2" step="0.1" value="' + TEMP + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">答题模式 <span class="rec" title="逐题独立=每题新会话；累积会话=整卷共用一条对话，缓存命中高、风格统一；整卷批量=一次请求答完整卷。后两者锁定单一模型">ⓘ</span></div><div class="d">影响缓存命中率与跨题风格一致性</div></div><div class="ctl"><select id="cx-s-mode"><option value="independent"' + (SESSION_MODE === "independent" ? " selected" : "") + '>逐题独立</option><option value="session"' + (SESSION_MODE === "session" ? " selected" : "") + '>累积会话</option><option value="batch"' + (SESSION_MODE === "batch" ? " selected" : "") + '>整卷批量</option></select></div></div>'
             + '<div class="srr"><div><div class="lab">当前课程 <span class="rec" title="留空则自动从页面标题识别课程名">ⓘ</span></div><div class="d">答题记录归到哪门课，可手动指定</div></div><div class="ctl"><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="自动检测" style="min-width:160px" /></div></div>'
             + '<div class="srr"><div><div class="lab">恢复默认参数</div><div class="d">把间隔 / 最大 Token / 温度 改回初始值</div></div><div class="ctl"><button class="bt" id="cx-reset-defaults">恢复默认参数</button></div></div>'
             + '<div class="srr"><div><div class="lab">重置统计数据</div><div class="d">清空 Token 用量与图表记录，不影响已保存的题目</div></div><div class="ctl"><button class="bt red" id="cx-reset-stats">重置统计</button></div></div>'
@@ -958,6 +1010,23 @@
             TEMP = v;
             GM_setValue("cx_temp", v);
             log("温度已设为 " + v);
+        });
+
+        /* 答题模式 */
+        var modeSel = modal.querySelector("#cx-s-mode");
+        if (modeSel) modeSel.addEventListener("change", function() {
+            SESSION_MODE = this.value;
+            GM_setValue("cx_session_mode", SESSION_MODE);
+            var ml = { independent: "逐题独立", session: "累积会话", batch: "整卷批量" };
+            log("答题模式已切换为：" + (ml[SESSION_MODE] || SESSION_MODE));
+        });
+
+        /* 会话模型 */
+        var sessSel = modal.querySelector("#cx-s-sessmodel");
+        if (sessSel) sessSel.addEventListener("change", function() {
+            SESSION_MODEL = this.value;
+            GM_setValue("cx_session_model", SESSION_MODEL);
+            log("会话模型已设为：" + SESSION_MODEL + "（" + (MODEL_PROVIDER_MAP[SESSION_MODEL] || "deepseek") + "）");
         });
 
         var resetBtn = modal.querySelector("#cx-reset-stats");
@@ -1395,49 +1464,29 @@
     }
 
     /* ===== AI 调用 ===== */
-    function callAI(qData) {
+    /* ===== 底层聊天请求 ===== */
+    function rawChat(useModel, messages, maxTokens) {
         return new Promise(function(resolve, reject) {
-            var useModel = TYPE_MODELS[qData.question_type] || "deepseek-chat";
             var providerId = getModelProvider(useModel);
             var key = getProviderKey(providerId);
             if (!key) { reject(new Error("未配置 " + (PROVIDER_CONFIG[providerId] ? PROVIDER_CONFIG[providerId].name : providerId) + " 的 API Key")); return; }
-
             var baseUrl = getProviderBase(providerId);
-
-            /* 纯文本用字符串 content（兼容 DeepSeek 等严格厂商）；带图才用数组 */
-            var textContent = "题目：" + qData.question;
-            if (qData.options.length > 0) {
-                textContent += "\n选项：\n" + qData.options.join("\n");
-            }
-            textContent += "\n题型：" + qData.question_type + "\n请给出正确答案。";
-
-            var imgPromises = qData.images.map(function(url) { return imgToBase64(url); });
-            Promise.all(imgPromises).then(function(b64s) {
-                var hasImg = false;
-                var contentParts = [{ type: "text", text: textContent }];
-                b64s.forEach(function(b64) { if (b64) { hasImg = true; contentParts.push({ type: "image_url", image_url: { url: b64 } }); } });
-                var userContent = hasImg ? contentParts : textContent;
-
             var req = GM_xmlhttpRequest({
                 method: "POST",
                 url: baseUrl + "/chat/completions",
                 headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
                 data: JSON.stringify({
                     model: useModel,
-                    messages: [
-                        { role: "system", content: getSystemPrompt() },
-                        { role: "user", content: userContent }
-                    ],
-                    max_tokens: MAX_TOKENS,
+                    messages: messages,
+                    max_tokens: maxTokens || MAX_TOKENS,
                     temperature: TEMP
                 }),
-                timeout: 60000,
+                timeout: 120000,
                 onload: function(r) {
                     currentRequest = null;
                     try {
                         var j = JSON.parse(r.responseText);
                         if (j.error) { reject(new Error(j.error.message)); return; }
-                        /* 记录 token 用量 */
                         if (j.usage) {
                             var pt = j.usage.prompt_tokens || 0;
                             var ct = j.usage.completion_tokens || 0;
@@ -1452,8 +1501,80 @@
                 ontimeout: function() { currentRequest = null; reject(new Error("请求超时")); }
             });
             currentRequest = req;
-            });
         });
+    }
+
+    /* 构建单题 user 内容（纯文本→字符串；带图→数组，兼容严格厂商） */
+    function buildUserContent(qData) {
+        var textContent = "题目：" + qData.question;
+        if (qData.options.length > 0) textContent += "\n选项：\n" + qData.options.join("\n");
+        textContent += "\n题型：" + qData.question_type + "\n请给出正确答案。";
+        if (!qData.images.length) return Promise.resolve(textContent);
+        return Promise.all(qData.images.map(imgToBase64)).then(function(b64s) {
+            var parts = [{ type: "text", text: textContent }];
+            var hasImg = false;
+            b64s.forEach(function(b) { if (b) { hasImg = true; parts.push({ type: "image_url", image_url: { url: b } }); } });
+            return hasImg ? parts : textContent;
+        });
+    }
+
+    function activeModel(qData) {
+        return SESSION_MODE === "independent" ? (TYPE_MODELS[qData.question_type] || "deepseek-chat") : SESSION_MODEL;
+    }
+
+    /* ===== 单题调用（independent / session 模式） ===== */
+    function callAI(qData) {
+        var useModel = activeModel(qData);
+        return buildUserContent(qData).then(function(userContent) {
+            if (SESSION_MODE === "session") {
+                if (!SESSION.messages) SESSION.messages = [{ role: "system", content: getSystemPrompt() }];
+                SESSION.messages.push({ role: "user", content: userContent });
+                return rawChat(useModel, SESSION.messages.slice()).then(function(res) {
+                    SESSION.messages.push({ role: "assistant", content: res.answer });
+                    return res;
+                }, function(err) { SESSION.messages.pop(); throw err; });
+            }
+            return rawChat(useModel, [
+                { role: "system", content: getSystemPrompt() },
+                { role: "user", content: userContent }
+            ]);
+        });
+    }
+
+    /* ===== 整卷批量（batch 模式） ===== */
+    function callAIBatch(questions) {
+        var useModel = SESSION_MODEL;
+        var lines = questions.map(function(q, i) {
+            var s = (i + 1) + ". [" + q.question_type + "] " + q.question;
+            if (q.options.length) s += "\n   选项：" + q.options.join(" | ");
+            return s;
+        }).join("\n\n");
+        var sys = getSystemPrompt() + "\n\n批量作答规则：按题目序号逐行输出，每行格式为「序号. 答案」，序号必须与题目一致，不要输出多余解释。";
+        var userMsg = "请依次回答以下 " + questions.length + " 道题：\n\n" + lines;
+        return rawChat(useModel, [
+            { role: "system", content: sys },
+            { role: "user", content: userMsg }
+        ], Math.max(MAX_TOKENS, questions.length * 200)).then(function(res) {
+            return { answers: parseBatch(res.answer, questions.length), model: useModel, raw: res.answer };
+        });
+    }
+
+    function parseBatch(text, n) {
+        var out = [];
+        for (var k = 0; k < n; k++) out.push("");
+        var re = /(^|\n)[ \t]*(\d+)[ \t]*[\.、:：\)）][ \t]*/g;
+        var marks = [], m;
+        while ((m = re.exec(text))) {
+            marks.push({ num: parseInt(m[2], 10), begin: m.index + m[1].length, content: m.index + m[0].length });
+        }
+        for (var i = 0; i < marks.length; i++) {
+            var idx = marks[i].num - 1;
+            if (idx < 0 || idx >= n) continue;
+            var cend = (i + 1 < marks.length) ? marks[i + 1].begin : text.length;
+            var seg = text.slice(marks[i].content, cend).trim();
+            if (!out[idx]) out[idx] = seg;
+        }
+        return out;
     }
 
     /* ===== 强力触发事件 ===== */
@@ -1739,9 +1860,42 @@
             return;
         }
 
-        log("找到 " + totalQuestions + " 题，开始答题");
+        var modeLabel = SESSION_MODE === "batch" ? "整卷批量" : (SESSION_MODE === "session" ? "累积会话" : "逐题独立");
+        log("找到 " + totalQuestions + " 题，开始答题（" + modeLabel + "）");
         setStatus("答题中...", "ok");
         resetUsage();
+        SESSION.messages = null; /* 每轮开始重置会话上下文 */
+
+        /* 批量模式：整卷一次请求 */
+        if (SESSION_MODE === "batch") {
+            try {
+                var batchRes = await callAIBatch(questions);
+                for (var bi = 0; bi < questions.length; bi++) {
+                    if (!isRunning) break;
+                    var bq = questions[bi];
+                    var bans = cleanAnswer(batchRes.answers[bi] || "", bq.question_type);
+                    log("第" + (bi + 1) + "题答案: " + bans.substring(0, 80) + (bans.length > 80 ? "..." : ""));
+                    fillAnswer(bq.element, bans, bq.question_type);
+                    bq.element.classList.remove("cx-highlight", "cx-done");
+                    saveAnsweredQuestion(bq, bans, batchRes.model);
+                    answeredCount++;
+                    updateProgress();
+                }
+            } catch (e) {
+                log("批量答题失败: " + e.message);
+                setStatus("批量失败: " + e.message, "err");
+            }
+            if (isRunning) {
+                log("批量完成！");
+                setStatus("完成 ✓", "ok");
+                try { GM_notification({ title: "学习通答题完成", text: "已完成 " + answeredCount + "/" + totalQuestions + " 题", timeout: 5000 }); } catch(e) {}
+            }
+            isRunning = false;
+            if (panel) panel.classList.remove("running");
+            document.getElementById("cx-start").disabled = false;
+            document.getElementById("cx-stop").disabled = true;
+            return;
+        }
 
         for (var i = 0; i < questions.length; i++) {
             if (!isRunning) break;
