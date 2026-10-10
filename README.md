@@ -1,10 +1,10 @@
 # 学习通自动答题助手 Next
 
-**纯浏览器脚本（油猴 / Tampermonkey），无需安装任何环境。**
+**Tampermonkey 脚本，无需安装任何环境。**
 
 > 抓取学习通题目 → 调用 AI 自动作答。支持多家供应商、按题型选模型、答题记录导出与 Token 统计，配可拖动的悬浮工具球与实时日志。
 
-> Fork 自 [long-0000/chaoxing-answer-helper](https://github.com/long-0000/chaoxing-answer-helper)，本仓库为二次开发版（Next）。
+> 由 [long-0000/chaoxing-answer-helper](https://github.com/long-0000/chaoxing-answer-helper) Fork，本仓库为二次开发版（Next）。
 
 ---
 
@@ -63,13 +63,13 @@
 
 | 标签页 | 功能 |
 |--------|------|
-| 📈 仪表盘 | 总 Token、答题数、预估费用，含环形图与折线图 |
-| 📉 Token 分析 | 输入 / 输出 Token 明细 |
-| 📋 题目导出 | 导出答题记录（JSON / CSV / TXT / HTML） |
-| 🔑 模型配置 | 管理各供应商 Key，按题型选模型（按厂商分组） |
-| ⚙️ 系统设置 | 答题间隔、最大 Token、提示词、重置统计 |
-| 📖 使用说明 | 使用指南与注意事项 |
-| ℹ️ 脚本信息 | 当前版本、免责声明、项目地址 |
+|  仪表盘 | 总 Token、答题数、预估费用，含环形图与折线图 |
+|  Token 分析 | 输入 / 输出 Token 明细 |
+|  题目导出 | 导出答题记录（JSON / CSV / TXT / HTML） |
+|  模型配置 | 管理各供应商 Key，按题型选模型（按厂商分组） |
+|  系统设置 | 答题间隔、最大 Token、提示词、重置统计 |
+|  使用说明 | 使用指南与注意事项 |
+|  脚本信息 | 当前版本、免责声明、项目地址 |
 
 > 模型配置里点「测试」时，**整张厂商卡片**会变淡绿（成功）或淡红（失败）。
 
@@ -79,14 +79,14 @@
 
 | 供应商 | 代表模型 | 官方接口 |
 |--------|----------|:---:|
-| **DeepSeek** | `deepseek-chat`, `deepseek-reasoner`, `deepseek-v4-pro` | ✅ OpenAI 兼容 |
-| **OpenAI** | `gpt-5.5`, `gpt-5.5-pro`, `gpt-6-sol` | ✅ OpenAI 兼容 |
-| **通义千问** | `qwen3.6-plus`, `qwen-plus`, `qwen-max` | ✅ OpenAI 兼容 |
-| **智谱 GLM** | `glm-4.6`, `glm-5`, `glm-5.3` | ✅ OpenAI 兼容 |
+| **DeepSeek** | `deepseek-chat`, `deepseek-reasoner`, `deepseek-v41-flash` | ✅ OpenAI 兼容 |
+| **OpenAI** | `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-6.1-sol` | ✅ OpenAI 兼容 |
+| **通义千问** | `qwen3.8-flash`, `qwen-plus`, `qwen-max` | ✅ OpenAI 兼容 |
+| **智谱 GLM** | `glm-5`, `glm-5.2`, `glm-5.3-flash` | ✅ OpenAI 兼容 |
 | **月之暗面** | `kimi-k2.6`, `kimi-k3` | ✅ OpenAI 兼容 |
 | **MiniMax** | `MiniMax-M2.5`, `MiniMax-M3` | ⚠️ 需兼容端点 |
-| **Anthropic** | `claude-sonnet-4-5`, `claude-opus-5` | ⚠️ 官方非 OpenAI 格式 |
-| **Google Gemini** | `gemini-2.5-pro`, `gemini-3.1-pro-preview` | ⚠️ 官方非 OpenAI 格式 |
+| **Anthropic** | `claude-sonnet-5`, `claude-opus-5.5` | ⚠️ 官方非 OpenAI 格式 |
+| **Google Gemini** | `gemini-3.5-pro`, `gemini-3.8-flash` | ⚠️ 官方非 OpenAI 格式 |
 
 > ⚠️ 标记的供应商官方接口与 OpenAI 格式不同，官方直连可能失败；走 **OpenAI 兼容聚合网关**时通常可用。
 > 💡 完整模型列表以脚本「模型配置」下拉为准；模型 ID 以你实际使用的网关 / 官方支持为准。
