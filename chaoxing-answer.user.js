@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         学习通自动答题助手
+// @name         学习通自动答题助手 Next
 // @namespace    https://github.com/chaoxing-helper
-// @version      3.7.0
+// @version      4.5.0
 // @description  抓取学习通题目，调用 AI 自动答题
 // @author       chaoxing-helper
 // @match        *://*.chaoxing.com/*
@@ -17,9 +17,7 @@
 // @connect      dashscope.aliyuncs.com
 // @connect      open.bigmodel.cn
 // @connect      api.moonshot.cn
-// @connect      api.baichuan-ai.com
 // @connect      api.minimax.chat
-// @connect      spark-api.xf-yun.com
 // @inject-into  page
 // @noframes
 // @run-at       document-body
@@ -36,6 +34,9 @@
     console.log("[学习通助手] 脚本开始加载");
 
 
+
+    /* 脚本版本号：每次改动在此递增，并在 @version 头同步 */
+    var VERSION = "4.5.0";
 
     var DELAY_MS = parseInt(GM_getValue("cx_delay", 1500), 10);
     var MAX_TOKENS = parseInt(GM_getValue("cx_maxtokens", 2048), 10);
@@ -54,26 +55,29 @@
         "qwen":     { name: "通义千问", base: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
         "zhipu":    { name: "智谱 GLM", base: "https://open.bigmodel.cn/api/paas/v4" },
         "moonshot": { name: "月之暗面", base: "https://api.moonshot.cn/v1" },
-        "baichuan": { name: "百川", base: "https://api.baichuan-ai.com/v1" },
-        "minimax":  { name: "MiniMax", base: "https://api.minimax.chat/v1" },
-        "spark":    { name: "讯飞星火", base: "https://spark-api.xf-yun.com/v3.5/chat" }
+        "minimax":  { name: "MiniMax", base: "https://api.minimax.chat/v1" }
     };
-    /* 模型 → 供应商映射 */
+    /* 模型 → 供应商映射（2026-10 更新；ID 以聚合网关实际支持为准） */
     var MODEL_PROVIDER_MAP = {
-        "deepseek-chat":"deepseek","deepseek-reasoner":"deepseek",
-        "gpt-4o":"openai","gpt-4o-mini":"openai","gpt-4-turbo":"openai","gpt-3.5-turbo":"openai",
-        "claude-3-opus":"anthropic","claude-3-sonnet":"anthropic","claude-3-haiku":"anthropic","claude-3-5-sonnet":"anthropic",
-        "gemini-pro":"google","gemini-1.5-pro":"google","gemini-1.5-flash":"google","gemini-2.0-flash":"google",
-        "qwen-turbo":"qwen","qwen-plus":"qwen","qwen-max":"qwen",
-        "glm-4":"zhipu","glm-4v":"zhipu","glm-3-turbo":"zhipu",
-        "ernie-4.0":"openai","ernie-3.5":"openai","ernie-bot-turbo":"openai",
-        "moonshot-v1":"moonshot","moonshot-v1-8k":"moonshot",
-        "baichuan3":"baichuan","baichuan2-53b":"baichuan",
-        "minimax-abab6.5":"minimax","minimax-abab5.5":"minimax",
-        "spark-3.0":"spark","spark-4.0":"spark"
+        /* DeepSeek */
+        "deepseek-chat":"deepseek","deepseek-reasoner":"deepseek","deepseek-v3.2":"deepseek","deepseek-v4-pro":"deepseek","deepseek-v4-flash":"deepseek","deepseek-v41-flash":"deepseek",
+        /* OpenAI GPT（5.5 及以上） */
+        "gpt-5.5":"openai","gpt-5.5-pro":"openai","gpt-5.6-sol":"openai","gpt-5.6-luna":"openai","gpt-6-sol":"openai","gpt-6-astra":"openai","gpt-6.1-sol":"openai",
+        /* Anthropic Claude（4.5 及以上，含 Fable 系列） */
+        "claude-sonnet-4-5":"anthropic","claude-opus-4-5":"anthropic","claude-haiku-4-5":"anthropic","claude-sonnet-4-6":"anthropic","claude-opus-4-6":"anthropic","claude-opus-5":"anthropic","claude-opus-5-1":"anthropic","claude-sonnet-5":"anthropic","claude-sonnet-5-5":"anthropic","claude-haiku-5-5":"anthropic","claude-opus-5-5":"anthropic","claude-fable-5":"anthropic","claude-fable-5-1":"anthropic",
+        /* Google Gemini */
+        "gemini-2.5-pro":"google","gemini-2.5-flash":"google","gemini-3.1-pro-preview":"google","gemini-3.5-flash":"google","gemini-3.6-flash":"google","gemini-3.7-flash":"google","gemini-3.8-flash":"google",
+        /* 通义千问 Qwen（含 3.6 / 3.7 / 3.8 系列） */
+        "qwen3.6-plus":"qwen","qwen3.7-max":"qwen","qwen3.7-plus":"qwen","qwen3.8-max":"qwen","qwen-plus":"qwen","qwen-max":"qwen","qwen-turbo":"qwen",
+        /* 智谱 GLM */
+        "glm-4.5":"zhipu","glm-4.6":"zhipu","glm-5":"zhipu","glm-5.2":"zhipu","glm-5.3":"zhipu","glm-5.3-flash":"zhipu",
+        /* 月之暗面 Kimi / Moonshot */
+        "kimi-k2.5":"moonshot","kimi-k2.6":"moonshot","kimi-k2.8-preview":"moonshot","kimi-k3":"moonshot",
+        /* MiniMax */
+        "MiniMax-M2.5":"minimax","MiniMax-M2.7":"minimax","MiniMax-M3":"minimax","MiniMax-M3.1-preview":"minimax"
     };
     /* 供应商 ID 列表（按展示顺序） */
-    var PROVIDER_ORDER = ["deepseek","openai","anthropic","google","qwen","zhipu","moonshot","baichuan","minimax","spark"];
+    var PROVIDER_ORDER = ["deepseek","openai","anthropic","google","qwen","zhipu","moonshot","minimax"];
 
     /* 按题型模型配置 */
     var MODEL_LIST = Object.keys(MODEL_PROVIDER_MAP);
@@ -176,62 +180,81 @@
     function injectStyles() {
         var style = document.createElement("style");
         style.textContent = [
-            "#cx-panel{position:fixed;top:80px;right:20px;z-index:999999;width:340px;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.25);font:14px/1.5 'Microsoft YaHei','PingFang SC',sans-serif;color:#333;overflow:hidden;display:block;}",
-            "#cx-panel *{box-sizing:border-box;margin:0;padding:0;line-height:1.5;}",
-            "#cx-panel .hd{background:linear-gradient(135deg,#4A90D9,#357ABD);color:#fff;padding:14px 18px;font-size:16px;font-weight:700;display:flex;justify-content:space-between;align-items:center;cursor:move;user-select:none;}",
-            "#cx-panel .hd .close{cursor:pointer;font-size:20px;opacity:.7;}",
-            "#cx-panel .hd .close:hover{opacity:1;}",
-            "#cx-panel .bd{padding:14px 18px;}",
-            "#cx-panel .row{display:flex;justify-content:space-between;align-items:center;margin:6px 0;}",
-            "#cx-panel label{font-size:13px;color:#666;flex-shrink:0;margin-right:8px;}",
-            "#cx-panel .key-input{width:100%;padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;outline:none;box-sizing:border-box;}",
-            "#cx-panel .key-input:focus{border-color:#4A90D9;}",
-            "#cx-panel .btn-row{display:flex;gap:6px;justify-content:flex-end;margin:4px 0 8px;}",
-            "#cx-panel .btn-sm{border:none;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:700;cursor:pointer;background:#4A90D9;color:#fff;}",
-            "#cx-panel .btn-sm:hover{background:#357ABD;}",
-            "#cx-panel .status{padding:6px 12px;border-radius:6px;font-size:13px;margin:8px 0;text-align:center;}",
-            "#cx-panel .status.ok{background:#d4edda;color:#155724;}",
-            "#cx-panel .status.warn{background:#fff3cd;color:#856404;}",
-            "#cx-panel .status.err{background:#f8d7da;color:#721c24;}",
-            "#cx-panel .progress{font-size:14px;margin:6px 0;}",
-            "#cx-panel .action-row{display:flex;gap:6px;margin:8px 0 0;}",
-            "#cx-panel .action-row .btn{flex:1;text-align:center;border:none;border-radius:6px;padding:8px 0;font-size:14px;font-weight:700;cursor:pointer;}",
-            "#cx-panel .btn-primary{background:#4A90D9;color:#fff;}",
-            "#cx-panel .btn-primary:hover{background:#357ABD;}",
-            "#cx-panel .btn-primary:disabled{background:#a0c4e8;cursor:not-allowed;}",
-            "#cx-panel .btn-danger{background:#e74c3c;color:#fff;}",
-            "#cx-panel .btn-danger:hover{background:#c0392b;}",
-            "#cx-panel .btn-danger:disabled{background:#f0a8a0;cursor:not-allowed;}",
-            "#cx-panel .log{max-height:200px;overflow-y:auto;border-top:1px solid #eee;padding:8px 16px;font-size:12px;background:#fafafa;}",
-            "#cx-panel .log div{padding:2px 0;border-bottom:1px solid #f5f5f5;}",
-            "#cx-panel .log .time{color:#999;margin-right:6px;}",
-            ".cx-highlight{outline:3px solid #4A90D9 !important;outline-offset:2px;}",
-            ".cx-done{outline:3px solid #28a745 !important;outline-offset:2px;}",
+            /* 设计令牌 · 原插件蓝灰配色（弹窗用） */
+            "#cx-launcher,#cx-stats-modal{--cx-brand:#58a6ff;--cx-brand-t:#7cb8f0;--cx-brand-rgb:88,166,255;--cx-alt:#3fb950;--cx-alt-t:#56d364;--cx-alt-rgb:63,185,80;--cx-pop:#f85149;--cx-pop-t:#ff7b72;--cx-pop-rgb:248,81,73;--cx-purple:#bc8cff;--cx-gold:#d29922;--cx-panel:#0d1117;--cx-panel-2:#161b22;--cx-panel-deep:#161b22;--cx-ink:#e6edf3;--cx-ink-2:#8b949e;--cx-mut:#8b949e;--cx-line:#30363d;--cx-line-soft:#21262d;--cx-brand-tint:rgba(88,166,255,.12);--cx-brand-line:rgba(88,166,255,.4);--cx-alt-tint:rgba(63,185,80,.12);--cx-alt-line:rgba(63,185,80,.4);--cx-r:10px;--cx-r-sm:8px;--cx-r-xs:6px;--cx-sans:-apple-system,'PingFang SC','Microsoft YaHei',system-ui,sans-serif;--cx-serif:var(--cx-sans);--cx-mono:var(--cx-sans);}",
+            /* 悬浮按钮 · 向下整块弹出 */
+            "#cx-launcher{position:fixed;top:80px;right:20px;z-index:999999;color-scheme:light;font-family:var(--cx-sans);display:flex;flex-direction:column;align-items:flex-end;gap:8px;}",
+            "#cx-launcher *{box-sizing:border-box;margin:0;}",
+            "#cx-fab{width:54px;height:54px;border-radius:50%;background:linear-gradient(135deg,#4A90D9,#357ABD);color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;box-shadow:0 6px 18px rgba(53,122,189,.4);position:relative;user-select:none;flex-shrink:0;transition:transform .18s;}",
+            "#cx-fab:hover{transform:translateY(-2px);}",
+            "#cx-fab:active{cursor:grabbing;}",
+            "#cx-fab-ico{display:flex;}",
+            "#cx-fab-ico svg{width:26px;height:26px;display:block;}",
+            "#cx-badge{position:absolute;top:-3px;right:-3px;min-width:20px;height:20px;padding:0 5px;border-radius:10px;background:#e74c3c;color:#fff;font-size:11px;line-height:20px;text-align:center;font-weight:700;box-shadow:0 0 0 2px #fff;}",
+            "#cx-dot{position:absolute;bottom:2px;right:2px;width:12px;height:12px;border-radius:50%;background:#ffc107;border:2px solid #fff;}",
+            "#cx-dot.ok{background:#28a745;}#cx-dot.warn{background:#ffc107;}#cx-dot.err{background:#e74c3c;}",
+            "#cx-launcher.running #cx-dot{animation:cx-pulse 1.6s infinite;}",
+            "@keyframes cx-pulse{0%{box-shadow:0 0 0 0 rgba(74,144,217,.5)}70%{box-shadow:0 0 0 8px rgba(74,144,217,0)}100%{box-shadow:0 0 0 0 rgba(74,144,217,0)}}",
+            "#cx-menu{display:none;width:200px;background:#fff;border:1px solid #e3e8ef;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.18);padding:10px;flex-direction:column;gap:6px;color:#333;}",
+            "#cx-launcher:hover #cx-menu,#cx-launcher.pinned #cx-menu{display:flex;animation:cx-menu-in .16s ease;}",
+            "@keyframes cx-menu-in{from{opacity:0;transform:translateY(-6px)}}",
+            "#cx-status{font-size:12px;font-weight:600;color:#856404;padding:2px 4px 7px;border-bottom:1px solid #eef1f5;margin-bottom:2px;}#cx-status.ok{color:#155724;}#cx-status.warn{color:#856404;}#cx-status.err{color:#721c24;}",
+            "#cx-progress{font-size:11px;color:#8a94a6;padding:0 4px 6px;}",
+            ".cx-btn{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:1px solid #dfe4ea;background:#f7f9fc;color:#3a4250;border-radius:8px;padding:12px 8px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;}",
+            ".cx-btn svg{width:16px;height:16px;flex:none;display:block;}",
+            ".cx-btn:hover{border-color:#4A90D9;color:#357ABD;background:#eaf2fb;transform:translateX(2px);}",
+            ".cx-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}",
+            ".cx-btn:disabled:hover{border-color:#dfe4ea;color:#3a4250;background:#f7f9fc;transform:none;}",
+            ".cx-btn.primary{background:#4A90D9;border-color:#4A90D9;color:#fff;}",
+            ".cx-btn.primary:hover{background:#357ABD;border-color:#357ABD;color:#fff;}",
+            ".cx-btn.danger{color:#e74c3c;border-color:#f2c4bd;background:#fdf3f2;}",
+            ".cx-btn.danger:hover:not(:disabled){background:#e74c3c;border-color:#e74c3c;color:#fff;}",
+            "#cx-logbox{position:fixed;bottom:20px;right:20px;z-index:999998;width:320px;max-height:42vh;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35);font-family:var(--cx-sans);color-scheme:dark;display:none;flex-direction:column;overflow:hidden;}",
+            "#cx-logbox.show{display:flex;}",
+            "#cx-logbox .lb-hd{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#161b22;border-bottom:1px solid #21262d;font-size:13px;font-weight:700;}",
+            "#cx-logbox .lb-close{cursor:pointer;color:#8b949e;font-size:18px;line-height:1;padding:0 2px;}",
+            "#cx-logbox .lb-close:hover{color:#f85149;}",
+            "#cx-logbox .lb-bd{padding:8px 12px;overflow-y:auto;font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.6;}",
+            "#cx-logbox .lb-bd div{padding:2px 0;border-bottom:1px solid rgba(33,38,45,.5);word-break:break-all;}",
+            "#cx-logbox .lb-bd .lb-time{color:#8b949e;margin-right:6px;}",
+            ".cx-highlight{outline:2px solid #4A90D9 !important;outline-offset:2px;}",
+            ".cx-done{outline:2px solid #28a745 !important;outline-offset:2px;}",
         ].join(" ");
         document.head.appendChild(style);
     }
 
     /* ===== 工具函数 ===== */
     function log(msg) {
-        var el = document.getElementById("cx-log");
-        if (!el) return;
+        var plain = String(msg).replace(/<[^>]+>/g, "");
         var t = new Date().toLocaleTimeString();
-        var d = document.createElement("div");
-        d.innerHTML = "<span class=\"time\">[" + t + "]</span>" + msg;
-        el.appendChild(d);
-        el.scrollTop = el.scrollHeight;
+        console.log("[学习通助手] " + plain);
+        var fab = document.getElementById("cx-fab");
+        if (fab) fab.setAttribute("title", "学习通答题助手 [" + t + "] " + plain);
+        var box = document.getElementById("cx-logbox");
+        if (!box) return;
+        var bd = box.querySelector(".lb-bd");
+        var line = document.createElement("div");
+        line.innerHTML = '<span class="lb-time">[' + t + ']</span>';
+        line.appendChild(document.createTextNode(plain));
+        bd.appendChild(line);
+        while (bd.children.length > 200) bd.removeChild(bd.firstChild);
+        box.classList.add("show");
+        bd.scrollTop = bd.scrollHeight;
     }
 
     function setStatus(text, type) {
+        type = type || "warn";
         var s = document.getElementById("cx-status");
-        if (!s) return;
-        s.textContent = text;
-        s.className = "status " + (type || "warn");
+        if (s) { s.textContent = text; s.className = type; }
+        var dot = document.getElementById("cx-dot");
+        if (dot) dot.className = type;
     }
 
     function updateProgress() {
         var el = document.getElementById("cx-progress");
         if (el) el.textContent = "进度：" + answeredCount + " / " + totalQuestions;
+        var b = document.getElementById("cx-badge");
+        if (b) b.textContent = answeredCount + "/" + totalQuestions;
     }
 
     /* ===== Token 用量统计 ===== */
@@ -276,90 +299,94 @@
         return d.toLocaleString();
     }
 
-/* ===== 面板创建 ===== */
+/* ===== 悬浮按钮创建 ===== */
     function createPanel() {
-        if (document.getElementById("cx-panel")) return;
-
-        /* 统计已配置 Key 的供应商数量 */
-        function countConfiguredProviders() {
-            var n = 0;
-            for (var pi = 0; pi < PROVIDER_ORDER.length; pi++) {
-                if (getProviderKey(PROVIDER_ORDER[pi])) n++;
-            }
-            return n;
-        }
+        if (document.getElementById("cx-launcher")) return;
 
         panel = document.createElement("div");
-        panel.id = "cx-panel";
+        panel.id = "cx-launcher";
         panel.innerHTML =
-            '<div class="hd"><span>学习通答题助手</span><span class="close" id="cx-close">&times;</span></div>' +
-            '<div class="bd">' +
-                '<div class="status warn" id="cx-status">就绪</div>' +
-                '<div class="progress" id="cx-progress">进度：0 / 0</div>' +
-                '<div style="display:flex;justify-content:space-between;align-items:center;margin:8px 0;padding:8px;background:#f5f5f5;border-radius:6px;font-size:12px">' +
-                    '<span id="cx-key-status">已配置 ' + countConfiguredProviders() + ' / ' + PROVIDER_ORDER.length + ' 个供应商 Key</span>' +
-                    '<button class="btn-sm" id="cx-manage-keys" style="background:#6c757d">管理</button>' +
-                '</div>' +
-                '<div class="action-row">' +
-                    '<button class="btn btn-primary" id="cx-start">开始答题</button>' +
-                    '<button class="btn btn-danger" id="cx-stop" disabled>停止</button>' +
-                '</div>' +
-                '<div style="margin-top:6px;text-align:center">' +
-                    '<button class="btn-sm" id="cx-debug" style="background:#6c757d">调试</button>' +
-                    '<button class="btn-sm" id="cx-stats" style="background:#28a745;margin-left:4px">统计</button>' +
-                '</div>' +
+            '<div id="cx-fab" title="学习通答题助手">' +
+                '<span id="cx-fab-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c3 2.5 9 2.5 12 0v-5"/></svg></span>' +
+                '<span id="cx-badge">0/0</span>' +
+                '<span id="cx-dot" class="warn"></span>' +
             '</div>' +
-            '<div class="log" id="cx-log"><div>就绪，在统计界面中配置各供应商 Key 后开始</div></div>';
+            '<div id="cx-menu">' +
+                '<div id="cx-status" class="warn">就绪</div>' +
+                '<div id="cx-progress">进度：0 / 0</div>' +
+                '<button id="cx-start" class="cx-btn primary" title="开始答题"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>开始答题</span></button>' +
+                '<button id="cx-stop" class="cx-btn danger" disabled title="停止答题"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span>停止</span></button>' +
+                '<button id="cx-debug" class="cx-btn" title="调试题目识别"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span>调试</span></button>' +
+                '<button id="cx-stats" class="cx-btn" title="设置 / 统计"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7 7 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.74 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7 7 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96a7 7 0 0 0 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg><span>更多 / 设置</span></button>' +
+            '</div>';
 
         document.body.appendChild(panel);
-        console.log("[学习通助手] 面板已添加到页面");
+        console.log("[学习通助手] 悬浮按钮已添加");
 
-        document.getElementById("cx-close").onclick = function() { panel.remove(); };
-        document.getElementById("cx-manage-keys").onclick = function() {
-            openStatsPage();
-            setTimeout(function() {
-                var ni = document.querySelector('#cx-stats-modal .ni[data-tab="models"]');
-                if (ni) ni.click();
-            }, 50);
-        };
+        /* 右下角实时日志浮窗 */
+        if (!document.getElementById("cx-logbox")) {
+            var lb = document.createElement("div");
+            lb.id = "cx-logbox";
+            lb.innerHTML =
+                '<div class="lb-hd"><span>运行日志</span><span class="lb-close" id="cx-lb-close" title="关闭">&times;</span></div>' +
+                '<div class="lb-bd"></div>';
+            document.body.appendChild(lb);
+            lb.querySelector("#cx-lb-close").onclick = function() { lb.classList.remove("show"); };
+        }
+
+        /* 恢复保存的位置（right/top 锚定，展开时按钮不跳动） */
+        var saved = GM_getValue("cx_launcher_pos", null);
+        if (saved && saved.top != null) {
+            panel.style.right = saved.right + "px";
+            panel.style.top = saved.top + "px";
+            panel.style.left = "auto";
+        }
+
         document.getElementById("cx-start").onclick = startAnswering;
         document.getElementById("cx-stop").onclick = stopAnswering;
         document.getElementById("cx-debug").onclick = debugQuestions;
         document.getElementById("cx-stats").onclick = openStatsPage;
 
-        /* ===== 面板拖拽 ===== */
+        /* ===== 拖拽（圆形按钮为手柄）；未移动则点击钉住展开 ===== */
         (function() {
-            var header = panel.querySelector(".hd");
-            var isDragging = false, startX, startY, origX, origY;
-            header.onmousedown = function(e) {
-                if (e.target.id === "cx-close") return;
-                isDragging = true;
+            var fab = document.getElementById("cx-fab");
+            fab.addEventListener("mousedown", function(e) {
+                var moved = false, startX = e.clientX, startY = e.clientY;
                 var rect = panel.getBoundingClientRect();
-                startX = e.clientX;
-                startY = e.clientY;
-                origX = rect.left;
-                origY = rect.top;
-                panel.style.left = origX + "px";
-                panel.style.right = "auto";
-                panel.style.top = origY + "px";
-                document.onmousemove = function(ev) {
-                    if (!isDragging) return;
-                    panel.style.left = (origX + ev.clientX - startX) + "px";
-                    panel.style.top = (origY + ev.clientY - startY) + "px";
-                };
-                document.onmouseup = function() {
-                    isDragging = false;
-                    document.onmousemove = null;
-                    document.onmouseup = null;
-                };
+                var startRight = window.innerWidth - rect.right;
+                var startTop = rect.top;
+                function onMove(ev) {
+                    var dx = ev.clientX - startX, dy = ev.clientY - startY;
+                    if (!moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) moved = true;
+                    if (!moved) return;
+                    var nr = Math.max(0, Math.min(window.innerWidth - 60, startRight - dx));
+                    var nt = Math.max(0, Math.min(window.innerHeight - 60, startTop + dy));
+                    panel.style.right = nr + "px";
+                    panel.style.top = nt + "px";
+                    panel.style.left = "auto";
+                }
+                function onUp() {
+                    document.removeEventListener("mousemove", onMove);
+                    document.removeEventListener("mouseup", onUp);
+                    if (moved) {
+                        GM_setValue("cx_launcher_pos", {
+                            right: parseInt(panel.style.right, 10),
+                            top: parseInt(panel.style.top, 10)
+                        });
+                    } else {
+                        panel.classList.toggle("pinned");
+                    }
+                }
+                document.addEventListener("mousemove", onMove);
+                document.addEventListener("mouseup", onUp);
                 e.preventDefault();
-            };
+            });
         })();
 
         log("脚本加载成功");
     }
 
-    /* ===== 生成题型模型选择 HTML ===== */
+    /* ===== 生成题型模型选择 HTML（按厂商分组，厂商高亮） ===== */
     function makeTypeSelects() {
         var out = "";
         var tlist = ["单选题","多选题","判断题","填空题","简答题"];
@@ -370,17 +397,20 @@
             var curProvName = PROVIDER_CONFIG[curProvId] ? PROVIDER_CONFIG[curProvId].name : curProvId;
             out += '<div class="ms-row">'
                 + '<span class="l">' + t + '</span>'
+                + '<span class="prov-chip" data-type="' + t + '">' + curProvName + '</span>'
                 + '<select class="type-model" data-type="' + t + '">';
-            for (var mi = 0; mi < MODEL_LIST.length; mi++) {
-                var m = MODEL_LIST[mi];
-                var provId = MODEL_PROVIDER_MAP[m] || "deepseek";
-                var provName = PROVIDER_CONFIG[provId] ? PROVIDER_CONFIG[provId].name : provId;
-                out += '<option value="' + m + '"';
-                if (m === cur) out += ' selected';
-                out += '>' + m + ' — ' + provName + '</option>';
+            for (var pi = 0; pi < PROVIDER_ORDER.length; pi++) {
+                var pid = PROVIDER_ORDER[pi];
+                var pname = PROVIDER_CONFIG[pid] ? PROVIDER_CONFIG[pid].name : pid;
+                var models = MODEL_LIST.filter(function(m){ return (MODEL_PROVIDER_MAP[m] || "deepseek") === pid; });
+                if (!models.length) continue;
+                out += '<optgroup label="' + pname + '">';
+                for (var mi = 0; mi < models.length; mi++) {
+                    out += '<option value="' + models[mi] + '"' + (models[mi] === cur ? ' selected' : '') + '>' + models[mi] + '</option>';
+                }
+                out += '</optgroup>';
             }
             out += '</select>'
-                + '<span class="h">' + curProvName + '</span>'
                 + '</div>';
         }
         return out;
@@ -437,76 +467,93 @@
             var st = document.createElement("style");
             st.id = "cx-stats-style";
             st.textContent = [
-                "#cx-stats-modal{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center}",
+                "#cx-stats-modal{position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.55);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}",
                 "#cx-stats-modal *{box-sizing:border-box}",
-                "#cx-stats-modal .w{width:min(1100px,96vw);height:min(760px,92vh);background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:12px;display:flex;flex-direction:column;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}",
-                "#cx-stats-modal .h{height:54px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #21262d;background:#161b22}",
-                "#cx-stats-modal .h .t{font-size:16px;font-weight:700}",
-                "#cx-stats-modal .x{cursor:pointer;border:none;background:transparent;color:#8b949e;font-size:22px;line-height:1}",
+                "#cx-stats-modal .w{position:relative;width:min(1100px,96vw);height:min(760px,92vh);background:var(--cx-panel);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r);display:flex;flex-direction:column;overflow:hidden;color-scheme:dark;font-family:var(--cx-sans);box-shadow:0 24px 70px rgba(0,0,0,.5);animation:cx-modal-in .28s cubic-bezier(.2,.7,.3,1)}",
+                "@keyframes cx-modal-in{from{opacity:0;transform:translateY(16px) scale(.98)}}",
+                "#cx-stats-modal select option{background:var(--cx-panel-deep);color:var(--cx-ink)}",
+                "#cx-stats-modal .h{height:56px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--cx-line-soft);background:var(--cx-panel-2)}",
+                "#cx-stats-modal .h .t{font-family:var(--cx-serif);font-size:18px;font-weight:700;color:var(--cx-ink);letter-spacing:.02em}",
+                "#cx-stats-modal .x{width:30px;height:30px;border:1px solid var(--cx-line);background:var(--cx-panel-deep);color:var(--cx-mut);font-size:16px;line-height:1;border-radius:var(--cx-r-xs);cursor:pointer;transition:.18s}",
+                "#cx-stats-modal .x:hover{color:var(--cx-brand-t);border-color:var(--cx-brand)}",
                 "#cx-stats-modal .b{flex:1;display:flex;min-height:0}",
-                "#cx-stats-modal .nav{width:180px;border-right:1px solid #21262d;background:#161b22;padding:10px}",
-                "#cx-stats-modal .ni{padding:10px 12px;border-radius:8px;color:#8b949e;cursor:pointer;font-size:13px;font-weight:600;margin-bottom:6px}",
-                "#cx-stats-modal .ni.on{background:rgba(88,166,255,.12);color:#e6edf3}",
+                "#cx-stats-modal .nav{width:184px;border-right:1px solid var(--cx-line-soft);background:var(--cx-panel-2);padding:10px}",
+                "#cx-stats-modal .ni{position:relative;padding:9px 12px;border-radius:var(--cx-r-sm);color:var(--cx-mut);cursor:pointer;font-size:13px;font-weight:600;margin-bottom:4px;border:1px solid transparent;transition:.18s}",
+                "#cx-stats-modal .ni:hover{background:var(--cx-brand-tint);color:var(--cx-ink);transform:translateX(2px)}",
+                "#cx-stats-modal .ni.on{background:var(--cx-brand-tint);border-color:var(--cx-brand-line);color:var(--cx-brand-t)}",
+                "#cx-stats-modal .ni.on::before{content:'';position:absolute;left:-1px;top:22%;bottom:22%;width:3px;background:var(--cx-brand);border-radius:2px}",
                 "#cx-stats-modal .main{flex:1;min-width:0;overflow:auto;padding:16px}",
+                "#cx-stats-modal .main::-webkit-scrollbar{width:8px}",
+                "#cx-stats-modal .main::-webkit-scrollbar-thumb{background:rgba(203,203,203,.28);border-radius:4px}",
                 "#cx-stats-modal .tab{display:none}",
                 "#cx-stats-modal .tab.on{display:block}",
                 "#cx-stats-modal .gr{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}",
-                "#cx-stats-modal .cd{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:12px}",
-                "#cx-stats-modal .lb{font-size:12px;color:#8b949e;margin-bottom:4px}",
-                "#cx-stats-modal .nm{font-size:22px;font-weight:800}",
-                "#cx-stats-modal .pn{background:#161b22;border:1px solid #21262d;border-radius:10px;margin-bottom:12px;overflow:hidden}",
-                "#cx-stats-modal .ph{padding:10px 14px;border-bottom:1px solid #21262d;font-size:14px;font-weight:700}",
+                "#cx-stats-modal .cd{background:var(--cx-panel-deep);border:1px solid var(--cx-line);border-radius:var(--cx-r);padding:12px}",
+                "#cx-stats-modal .lb{font-family:var(--cx-mono);font-size:11px;letter-spacing:.06em;color:var(--cx-mut);margin-bottom:4px}",
+                "#cx-stats-modal .nm{font-family:var(--cx-serif);font-size:24px;font-weight:700;color:var(--cx-ink)}",
+                "#cx-stats-modal .pn{background:var(--cx-panel-deep);border:1px solid var(--cx-line);border-radius:var(--cx-r);margin-bottom:12px;overflow:hidden}",
+                "#cx-stats-modal .ph{padding:10px 14px;border-bottom:1px solid var(--cx-line-soft);font-size:14px;font-weight:700;color:var(--cx-ink)}",
                 "#cx-stats-modal .pb{padding:12px 14px}",
-                "#cx-stats-modal .sr{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(33,38,45,.5)}",
+                "#cx-stats-modal .sr{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .sr:last-child{border-bottom:none}",
-                "#cx-stats-modal .srr{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(33,38,45,.5)}",
+                "#cx-stats-modal .srr{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .srr:last-child{border-bottom:none}",
-                "#cx-stats-modal .srr .d{font-size:12px;color:#8b949e;margin-top:2px}",
-                "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 10px}",
+                "#cx-stats-modal .srr .d{font-size:12px;color:var(--cx-mut);margin-top:2px}",
+                "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:6px 10px;font-family:var(--cx-sans)}",
+                "#cx-stats-modal .srr select:focus,#cx-stats-modal .srr input:focus{border-color:var(--cx-brand);outline:none;box-shadow:0 0 0 3px var(--cx-brand-tint)}",
                 "#cx-stats-modal .srr select{min-width:180px}",
                 "#cx-stats-modal .srr input[type=number]{width:120px}",
                 "#cx-stats-modal .fx{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}",
-                "#cx-stats-modal button.bt{border:1px solid #30363d;background:#161b22;color:#e6edf3;border-radius:6px;padding:6px 12px;cursor:pointer}",
-                "#cx-stats-modal button.bt.red{border-color:rgba(248,81,73,.45);color:#f85149}",
-                "#cx-stats-modal .qi{padding:10px 0;border-bottom:1px solid rgba(33,38,45,.5)}",
+                "#cx-stats-modal button.bt{border:1px solid var(--cx-line);background:var(--cx-panel-deep);color:var(--cx-ink-2);border-radius:var(--cx-r-sm);padding:6px 12px;font-family:var(--cx-mono);font-size:12px;letter-spacing:.03em;cursor:pointer;transition:.18s}",
+                "#cx-stats-modal button.bt:hover{color:var(--cx-brand-t);border-color:var(--cx-brand);background:var(--cx-brand-tint);transform:translateY(-1px)}",
+                "#cx-stats-modal button.bt.red{border-color:var(--cx-brand-line);color:var(--cx-brand-t)}",
+                "#cx-stats-modal button.bt.red:hover{background:var(--cx-brand);color:#fff;border-color:var(--cx-brand)}",
+                "#cx-stats-modal .qi{padding:10px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .qi:last-child{border-bottom:none}",
-                "#cx-stats-modal .qm{font-size:12px;color:#8b949e;margin-top:4px}",
-                "#cx-stats-modal .ta{width:100%;min-height:100px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:10px;font-family:Consolas,monospace;resize:vertical}",
+                "#cx-stats-modal .qm{font-size:12px;color:var(--cx-mut);margin-top:4px}",
+                "#cx-stats-modal .ta{width:100%;min-height:100px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:10px;font-family:var(--cx-mono);font-size:12px;resize:vertical}",
                 "#cx-stats-modal table{width:100%;border-collapse:collapse;font-size:13px}",
-                "#cx-stats-modal th,#cx-stats-modal td{padding:8px;border-bottom:1px solid rgba(33,38,45,.6);text-align:left}",
+                "#cx-stats-modal th,#cx-stats-modal td{padding:8px;border-bottom:1px solid var(--cx-line-soft);text-align:left;color:var(--cx-ink-2)}",
+                "#cx-stats-modal th{font-family:var(--cx-serif);color:var(--cx-ink)}",
                 "#cx-stats-modal th:last-child,#cx-stats-modal td:last-child{text-align:right}",
-                /* 现代化组件 */
                 "#cx-stats-modal .mk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}",
-                "#cx-stats-modal .mk-card{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:10px 12px;transition:border-color .2s}",
-                "#cx-stats-modal .mk-card:hover{border-color:#30363d}",
+                "#cx-stats-modal .mk-card{background:var(--cx-panel-deep);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:10px 12px;transition:border-color .2s}",
+                "#cx-stats-modal .mk-card:hover{border-color:var(--cx-brand-line)}",
+                "#cx-stats-modal .mk-card.ok{background:rgba(63,185,80,.12);border-color:rgba(63,185,80,.55)}",
+                "#cx-stats-modal .mk-card.err{background:rgba(248,81,73,.12);border-color:rgba(248,81,73,.55)}",
+                "#cx-stats-modal .mk-card.ok .mk-card-h .n{color:#56d364}",
+                "#cx-stats-modal .mk-card.err .mk-card-h .n{color:#ff7b72}",
                 "#cx-stats-modal .mk-card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}",
-                "#cx-stats-modal .mk-card-h .n{font-size:13px;font-weight:600;color:#e6edf3}",
-                "#cx-stats-modal .mk-card-h .s{font-size:11px;color:#8b949e}",
+                "#cx-stats-modal .mk-card-h .n{font-size:13px;font-weight:600;color:var(--cx-ink)}",
+                "#cx-stats-modal .mk-card-h .s{font-family:var(--cx-mono);font-size:10px;color:var(--cx-mut)}",
                 "#cx-stats-modal .mk-card-b{display:flex;gap:6px}",
-                "#cx-stats-modal .mk-card-b input{flex:1;min-width:0;padding:6px 10px;font-size:13px;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:6px;outline:none;transition:border-color .2s}",
-                "#cx-stats-modal .mk-card-b input:focus{border-color:#58a6ff}",
-                "#cx-stats-modal .mk-card-b input.has-val{border-color:rgba(88,166,255,.3)}",
-                "#cx-stats-modal .mk-card-b .bt{padding:5px 14px;font-size:12px;white-space:nowrap;border:1px solid #30363d;background:#161b22;color:#e6edf3;border-radius:6px;cursor:pointer;transition:all .15s}",
-                "#cx-stats-modal .mk-card-b .bt:hover{border-color:#58a6ff;color:#58a6ff}",
-                "#cx-stats-modal .mk-card-b .bt.ok{border-color:#3fb950;color:#3fb950}",
-                "#cx-stats-modal .ms-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid rgba(33,38,45,.5)}",
+                "#cx-stats-modal .mk-card-b input{flex:1;min-width:0;padding:6px 10px;font-size:13px;background:var(--cx-panel);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-xs);outline:none;transition:border-color .2s}",
+                "#cx-stats-modal .mk-card-b input:focus{border-color:var(--cx-brand);box-shadow:0 0 0 3px var(--cx-brand-tint)}",
+                "#cx-stats-modal .mk-card-b input.has-val{border-color:var(--cx-alt-line)}",
+                "#cx-stats-modal .mk-card-b .bt{padding:5px 14px;font-size:12px;white-space:nowrap;border:1px solid var(--cx-line);background:var(--cx-panel);color:var(--cx-ink-2);border-radius:var(--cx-r-xs);cursor:pointer;transition:.15s}",
+                "#cx-stats-modal .mk-card-b .bt:hover{border-color:var(--cx-brand);color:var(--cx-brand-t)}",
+                "#cx-stats-modal .mk-card-b .bt.ok{border-color:var(--cx-alt);color:var(--cx-alt-t)}",
+                "#cx-stats-modal .ms-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--cx-line-soft);border-radius:var(--cx-r-sm);transition:background .15s}",
+                "#cx-stats-modal .ms-row:hover{background:var(--cx-panel-2)}",
                 "#cx-stats-modal .ms-row:last-child{border-bottom:none}",
-                "#cx-stats-modal .ms-row .l{font-size:13px;font-weight:600;color:#e6edf3;min-width:56px}",
-                "#cx-stats-modal .ms-row select{flex:1;padding:6px 10px;font-size:13px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;outline:none;cursor:pointer;transition:border-color .2s;-webkit-appearance:none;appearance:none;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M6 8L1 3h10z'/%3E%3C/svg%3E\");background-repeat:no-repeat;background-position:right 8px center;padding-right:28px}",
-                "#cx-stats-modal .ms-row select:focus{border-color:#58a6ff}",
-                "#cx-stats-modal .ms-row .h{font-size:11px;color:#8b949e;white-space:nowrap}"
+                "#cx-stats-modal .ms-row .l{font-size:13px;font-weight:600;color:var(--cx-ink);min-width:52px}",
+                "#cx-stats-modal .prov-chip{flex:none;min-width:72px;text-align:center;font-size:12px;font-weight:700;color:var(--cx-brand-t);background:var(--cx-brand-tint);border:1px solid var(--cx-brand-line);border-radius:999px;padding:3px 10px;white-space:nowrap}",
+                "#cx-stats-modal .ms-row select{flex:1;min-width:0;padding:7px 28px 7px 10px;font-size:13px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);outline:none;cursor:pointer;transition:border-color .2s;-webkit-appearance:none;appearance:none;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M6 8L1 3h10z'/%3E%3C/svg%3E\");background-repeat:no-repeat;background-position:right 9px center}",
+                "#cx-stats-modal .ms-row select:focus{border-color:var(--cx-brand);box-shadow:0 0 0 3px var(--cx-brand-tint)}",
+                "#cx-stats-modal .ms-row optgroup{background:var(--cx-panel-2);color:var(--cx-brand-t);font-weight:700;font-style:normal}",
+                "#cx-stats-modal .ms-row option{background:var(--cx-panel-deep);color:var(--cx-ink)}"
             ].join("");
             document.head.appendChild(st);
         }
 
         var questionRows = "";
         if (savedQs.length === 0) {
-            questionRows = '<div style="padding:24px 0;text-align:center;color:#8b949e">暂无题目记录</div>';
+            questionRows = '<div style="padding:24px 0;text-align:center;color:var(--cx-mut)">暂无题目记录</div>';
         } else {
             for (var qi = savedQs.length - 1; qi >= 0; qi--) {
                 var q = savedQs[qi];
-                var courseTag = q.course ? ' <span style="color:#58a6ff">' + escHtml(q.course) + '</span>' : '';
-                var assignTag = q.assignment ? ' <span style="color:#8b949e">› ' + escHtml(q.assignment) + '</span>' : '';
+                var courseTag = q.course ? ' <span style="color:var(--cx-brand-t)">' + escHtml(q.course) + '</span>' : '';
+                var assignTag = q.assignment ? ' <span style="color:var(--cx-mut)">› ' + escHtml(q.assignment) + '</span>' : '';
                 questionRows += '<div class="qi"><div>[' + (qi + 1) + '] [' + escHtml(q.type || "") + '] '
                     + escHtml((q.question || "").substring(0, 100)) + '</div>'
                     + '<div class="qm">' + escHtml(q.time || "") + courseTag + assignTag
@@ -519,7 +566,7 @@
         modal.id = "cx-stats-modal";
         modal.innerHTML = ''
             + '<div class="w">'
-            + '<div class="h"><div class="t">答题助手控制台 v3.5.5</div><button class="x" id="cx-sm-close">×</button></div>'
+            + '<div class="h"><div class="t">答题助手 Next · 控制台 v' + VERSION + '</div><button class="x" id="cx-sm-close">×</button></div>'
             + '<div class="b">'
             + '<div class="nav">'
             + '<div class="ni on" data-tab="dash">仪表盘</div>'
@@ -528,6 +575,7 @@
             + '<div class="ni" data-tab="models">模型配置</div>'
             + '<div class="ni" data-tab="settings">系统设置</div>'
             + '<div class="ni" data-tab="help">使用说明</div>'
+            + '<div class="ni" data-tab="info">脚本信息</div>'
             + '</div>'
             + '<div class="main">'
             + '<div class="tab on" id="cx-tab-dash">'
@@ -558,7 +606,7 @@
             + '<button class="bt" id="cx-exp-json">JSON</button>'
             + '<button class="bt" id="cx-exp-csv">CSV</button>'
             + '<button class="bt" id="cx-exp-txt">TXT</button>'
-            + '<button class="bt" id="cx-exp-html" style="background:rgba(88,166,255,.12);border-color:#58a6ff;color:#58a6ff">HTML</button>'
+            + '<button class="bt" id="cx-exp-html" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t)">HTML</button>'
             + '<button class="bt red" id="cx-clear-qs">清空</button>'
             + '</div>'
             + '<textarea class="ta" id="cx-exp-box" placeholder="导出内容显示在这里"></textarea>'
@@ -568,7 +616,7 @@
             + '<div class="tab" id="cx-tab-models">'
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="padding:8px 14px;font-size:13px">API Keys</div><div class="pb" style="padding:8px 14px">'
             + makeProviderKeyInputs()
-            + '<div class="fx" style="margin-top:8px"><button class="bt" id="cx-save-keys" style="background:rgba(88,166,255,.15);border-color:#58a6ff;color:#58a6ff;padding:4px 12px;font-size:12px">保存 Key</button></div>'
+            + '<div class="fx" style="margin-top:8px"><button class="bt" id="cx-save-keys" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t);padding:4px 12px;font-size:12px">保存 Key</button></div>'
             + '</div></div>'
             + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型</div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
             + '</div>'
@@ -576,21 +624,29 @@
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="font-size:13px">系统参数</div><div class="pb">'
             + '<div class="srr"><div><div>答题间隔</div><div class="d">单位毫秒</div></div><div><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
             + '<div class="srr"><div><div>最大 Token</div><div class="d">单次请求上限</div></div><div><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
-            + '<div class="srr"><div><div>当前课程</div><div class="d">手动设置课程名</div></div><div><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="留空则自动检测" style="flex:1;min-width:120px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 10px;font-size:13px" /></div></div>'
+            + '<div class="srr"><div><div>当前课程</div><div class="d">手动设置课程名</div></div><div><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="留空则自动检测" style="flex:1;min-width:120px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:6px 10px;font-size:13px" /></div></div>'
             + '<div class="srr"><div><div>重置统计数据</div><div class="d">清空 token 用量与记录</div></div><div><button class="bt red" id="cx-reset-stats">重置</button></div></div>'
             + '</div></div>'
             + '<div class="pn"><div class="ph" style="font-size:13px">提示词设置</div><div class="pb">'
-            + '<textarea id="cx-s-prompt" style="width:100%;min-height:80px;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:8px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box">' + (GM_getValue("system_prompt", "") || getDefaultPrompt()).replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</textarea>'
-            + '<div class="fx" style="margin-top:6px"><button class="bt" id="cx-save-sprompt" style="background:rgba(88,166,255,.15);border-color:#58a6ff;color:#58a6ff;padding:4px 12px;font-size:12px">保存提示词</button></div>'
+            + '<textarea id="cx-s-prompt" style="width:100%;min-height:80px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:8px;font-size:12px;font-family:var(--cx-mono);resize:vertical;box-sizing:border-box">' + (GM_getValue("system_prompt", "") || getDefaultPrompt()).replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</textarea>'
+            + '<div class="fx" style="margin-top:6px"><button class="bt" id="cx-save-sprompt" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t);padding:4px 12px;font-size:12px">保存提示词</button></div>'
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-help">'
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="font-size:13px">📖 使用说明</div><div class="pb" style="font-size:12px;line-height:1.8">'
-            + '<div style="margin-bottom:12px"><div style="color:#58a6ff;font-weight:600;margin-bottom:4px">🚀 快速开始</div><div style="color:#e6edf3">① 打开学习通作业页面<br>② 页面右侧会出现「学习通答题助手」面板<br>③ 点击「统计」→「模型配置」填入 API Key<br>④ 返回主面板，点击「开始答题」即可自动答题<br>⑤ 可随时点击「停止」按钮中断答题进程</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:#3fb950;font-weight:600;margin-bottom:4px">🔧 核心功能</div><div style="color:#8b949e">✅ 支持10+ AI供应商（DeepSeek/OpenAI/Claude等），按题型自动切换<br>✅ 智能识别课程/作业信息，支持手动修改<br>✅ 支持单选/多选/判断/填空/简答等全题型<br>✅ 答题记录自动保存，支持 JSON/CSV/TXT/HTML 导出<br>✅ Token用量统计与可视化（环形图/折线图）</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:#f0883e;font-weight:600;margin-bottom:4px">🤖 推荐模型</div><div style="color:#8b949e;font-family:monospace;font-size:11px">📍 DeepSeek: deepseek-chat (推荐), deepseek-reasoner<br>📍 OpenAI: gpt-4o, gpt-4o-mini<br>📍 Claude: claude-3-opus, claude-3-5-sonnet<br>📍 Gemini: gemini-1.5-pro, gemini-2.0-flash<br>📍 通义千问: qwen-turbo, qwen-plus, qwen-max<br>📍 智谱GLM: glm-4, glm-4v / 月之暗面: moonshot-v1</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:#d2a8ff;font-weight:600;margin-bottom:4px">💡 使用技巧</div><div style="color:#8b949e">• 答题间隔建议 1500-3000ms，避免请求过快被限制<br>• 判断/单选题可用便宜模型，简答题用更强的模型<br>• 题目和答案会自动保存，可在「题目导出」中查看历史记录<br>• 点击「调试」按钮可预览AI答案，不自动填写<br>• 可在「系统设置」中修改提示词，引导AI生成更准答案</div></div>'
-            + '<div><div style="color:#ef4444;font-weight:600;margin-bottom:4px">⚠️ 注意事项</div><div style="color:#f85149;font-size:11px">• 本脚本仅供个人学习交流，请遵守学校及平台相关规定<br>• API Key 仅保存在本地浏览器，不会上传到任何服务器<br>• 多选题请确认答案选项完整，避免漏选错选<br>• 建议先在练习题中测试，确认效果后再用于正式作业</div></div>'
+            + '<div style="margin-bottom:12px"><div style="color:var(--cx-brand-t);font-weight:600;margin-bottom:4px">🚀 快速开始</div><div style="color:var(--cx-ink)">① 打开学习通作业页面<br>② 右上角出现圆形悬浮按钮，悬停或点击向下展开菜单<br>③ 点「⚙ 更多」→「模型配置」填入 API Key<br>④ 回到悬浮按钮，点「▶ 开始」即可自动答题<br>⑤ 可随时点「■ 停止」中断答题进程</div></div>'
+            + '<div style="margin-bottom:12px"><div style="color:var(--cx-alt-t);font-weight:600;margin-bottom:4px">🔧 核心功能</div><div style="color:var(--cx-mut)">✅ 支持 8 家 AI 供应商（DeepSeek/OpenAI/Claude 等），按题型自动切换<br>✅ 智能识别课程/作业信息，支持手动修改<br>✅ 支持单选/多选/判断/填空/简答等全题型<br>✅ 答题记录自动保存，支持 JSON/CSV/TXT/HTML 导出<br>✅ Token 用量统计与可视化（环形图/折线图）</div></div>'
+            + '<div style="margin-bottom:12px"><div style="color:var(--cx-pop-t);font-weight:600;margin-bottom:4px">🤖 推荐模型</div><div style="color:var(--cx-mut);font-family:var(--cx-mono);font-size:11px">📍 DeepSeek: deepseek-chat (推荐), deepseek-reasoner, deepseek-v4-pro<br>📍 OpenAI: gpt-5.4, gpt-5.5-pro, gpt-6-sol<br>📍 Claude: claude-sonnet-4-5, claude-opus-5, claude-sonnet-5<br>📍 Gemini: gemini-2.5-pro, gemini-3.1-pro-preview<br>📍 通义千问: qwen3.6-plus, qwen-plus / 智谱GLM: glm-4.6, glm-5.3<br>📍 月之暗面: kimi-k2.6, kimi-k3 / MiniMax: MiniMax-M2.5</div></div>'
+            + '<div style="margin-bottom:12px"><div style="color:var(--cx-purple);font-weight:600;margin-bottom:4px">💡 使用技巧</div><div style="color:var(--cx-mut)">• 答题间隔建议 1500-3000ms，避免请求过快被限制<br>• 判断/单选题可用便宜模型，简答题用更强的模型<br>• 题目和答案会自动保存，可在「题目导出」中查看历史记录<br>• 点击「🐞 调试」按钮可预览题目识别，不自动填写<br>• 可在「系统设置」中修改提示词，引导 AI 生成更准答案</div></div>'
+            + '<div><div style="color:var(--cx-brand-t);font-weight:600;margin-bottom:4px">⚠️ 注意事项</div><div style="color:var(--cx-brand);font-size:11px">• 本脚本仅供个人学习交流，请遵守学校及平台相关规定<br>• API Key 仅保存在本地浏览器，不会上传到任何服务器<br>• 多选题请确认答案选项完整，避免漏选错选<br>• 建议先在练习题中测试，确认效果后再用于正式作业</div></div>'
+            + '</div></div>'
+            + '</div>'
+            + '<div class="tab" id="cx-tab-info">'
+            + '<div class="pn"><div class="ph" style="font-size:13px">ℹ️ 脚本信息</div><div class="pb" style="font-size:13px;line-height:1.9">'
+            + '<div class="sr"><span style="color:var(--cx-mut)">名称</span><span style="color:var(--cx-ink);font-weight:600">学习通自动答题助手 Next</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">当前版本</span><span style="color:var(--cx-brand-t);font-weight:700">v' + VERSION + '</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">项目地址</span><a href="https://github.com/long-0000/chaoxing-answer-helper" target="_blank" rel="noopener" style="color:var(--cx-brand-t);text-decoration:none">GitHub ↗</a></div>'
+            + '<div style="margin-top:12px;padding:10px 12px;background:var(--cx-panel-2);border:1px solid var(--cx-line-soft);border-radius:var(--cx-r-sm);color:var(--cx-mut);font-size:12px;line-height:1.8"><b style="color:var(--cx-pop-t)">免责声明：</b>本脚本仅供个人学习与技术研究使用，请遵守所在学校及超星平台的相关规定。API Key 仅保存在本地浏览器，不会上传到任何第三方服务器。因使用本脚本产生的一切后果由使用者自行承担。</div>'
             + '</div></div>'
             + '</div>'
             + '</div></div></div>';
@@ -791,13 +847,13 @@
                 GM_setValue("model_type_" + t, v);
                 TYPE_MODELS[t] = v;
                 log(t + " 模型已设为 " + v);
-                /* 更新右侧供应商提示 */
+                /* 更新厂商高亮芯片 */
                 var row = this.closest(".ms-row");
                 if (row) {
                     var provId = MODEL_PROVIDER_MAP[v] || "deepseek";
                     var provName = PROVIDER_CONFIG[provId] ? PROVIDER_CONFIG[provId].name : provId;
-                    var hint = row.querySelector(".h");
-                    if (hint) hint.textContent = provName;
+                    var chip = row.querySelector(".prov-chip");
+                    if (chip) { chip.textContent = provName; chip.setAttribute("data-prov", provId); }
                 }
             });
         });
@@ -857,18 +913,18 @@
                 var ctx = pieCanvas.getContext("2d");
                 var W = 280, H = 200, cx = 140, cy = 85, outerR = 65, innerR = 32;
                 var data = [
-                    { label: "输入", value: d.prompt || 0, color: "#3b82f6", sub: (d.prompt || 0).toLocaleString() },
-                    { label: "输出", value: d.completion || 0, color: "#10b981", sub: (d.completion || 0).toLocaleString() }
+                    { label: "输入", value: d.prompt || 0, color: "#c06a69", sub: (d.prompt || 0).toLocaleString() },
+                    { label: "输出", value: d.completion || 0, color: "#589a99", sub: (d.completion || 0).toLocaleString() }
                 ];
                 var total = data[0].value + data[1].value;
                 ctx.clearRect(0, 0, W, H);
                 if (total === 0) {
-                    ctx.fillStyle = "#8b949e"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+                    ctx.fillStyle = "#cbcbcb"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
                     ctx.fillText("暂无数据", cx, cy + 5);
                     return;
                 }
                 /* 外圈发光 */
-                ctx.shadowColor = "rgba(59,130,246,0.15)";
+                ctx.shadowColor = "rgba(192,106,105,0.15)";
                 ctx.shadowBlur = 12;
                 var startAngle = -Math.PI / 2;
                 data.forEach(function(d) {
@@ -881,15 +937,15 @@
                     ctx.fillStyle = d.color;
                     ctx.fill();
                     /* 描边分割线 */
-                    ctx.strokeStyle = "#0d1117"; ctx.lineWidth = 2;
+                    ctx.strokeStyle = "#121212"; ctx.lineWidth = 2;
                     ctx.stroke();
                     startAngle += sliceAngle;
                 });
                 ctx.shadowBlur = 0;
                 /* 中心文字 */
-                ctx.fillStyle = "#e6edf3"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillStyle = "#fefefe"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                 ctx.fillText(total.toLocaleString(), cx, cy - 6);
-                ctx.fillStyle = "#8b949e"; ctx.font = "10px sans-serif";
+                ctx.fillStyle = "#cbcbcb"; ctx.font = "10px sans-serif";
                 ctx.fillText("总 Token", cx, cy + 12);
                 /* 图例 */
                 var lx = 22, ly = 162;
@@ -897,7 +953,7 @@
                     var pct = ((d.value / total) * 100).toFixed(1);
                     /* 彩色圆点 */
                     ctx.beginPath(); ctx.arc(lx + 5, ly + 5, 5, 0, 2 * Math.PI); ctx.fillStyle = d.color; ctx.fill();
-                    ctx.fillStyle = "#e6edf3"; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+                    ctx.fillStyle = "#fefefe"; ctx.font = "11px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
                     var label = d.label + " " + pct + "%";
                     ctx.fillText(label, lx + 14, ly + 5);
                     lx += ctx.measureText(label).width + 24;
@@ -915,7 +971,7 @@
                 ctx.clearRect(0, 0, W, H);
                 var pts = logs.slice(-20);
                 if (pts.length < 2) {
-                    ctx.fillStyle = "#8b949e"; ctx.font = "13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                    ctx.fillStyle = "#cbcbcb"; ctx.font = "13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                     ctx.fillText(pts.length === 0 ? "暂无数据" : "数据不足", pad.l + cw / 2, pad.t + ch / 2);
                     return;
                 }
@@ -925,18 +981,18 @@
                 var roundTo = maxVal > 1000 ? 100 : (maxVal > 100 ? 10 : 1);
                 var yMax = Math.ceil(maxVal / roundTo) * roundTo;
                 /* 网格线（极淡） */
-                ctx.strokeStyle = "rgba(48,54,61,0.4)"; ctx.lineWidth = 1;
+                ctx.strokeStyle = "rgba(203,203,203,0.08)"; ctx.lineWidth = 1;
                 for (var gy = 0; gy <= 4; gy++) {
                     var y = pad.t + (gy / 4) * ch;
                     ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
-                    ctx.fillStyle = "#8b949e"; ctx.font = "9px sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+                    ctx.fillStyle = "#cbcbcb"; ctx.font = "9px sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
                     ctx.fillText(Math.round(yMax * (1 - gy / 4)), pad.l - 5, y);
                 }
                 /* 面积渐变 */
                 var stepX = pts.length > 1 ? cw / (pts.length - 1) : cw;
                 var grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + ch);
-                grad.addColorStop(0, "rgba(59,130,246,0.2)");
-                grad.addColorStop(1, "rgba(59,130,246,0.01)");
+                grad.addColorStop(0, "rgba(192,106,105,0.22)");
+                grad.addColorStop(1, "rgba(192,106,105,0.01)");
                 ctx.beginPath();
                 ctx.moveTo(pad.l, pad.t + ch);
                 vals.forEach(function(v, i) {
@@ -950,7 +1006,7 @@
                 ctx.fill();
                 /* 折线 */
                 ctx.beginPath();
-                ctx.strokeStyle = "#3b82f6"; ctx.lineWidth = 2.5;
+                ctx.strokeStyle = "#c06a69"; ctx.lineWidth = 2.5;
                 ctx.lineJoin = "round"; ctx.lineCap = "round";
                 vals.forEach(function(v, i) {
                     var x = pad.l + i * stepX;
@@ -963,12 +1019,12 @@
                     var x = pad.l + i * stepX;
                     var y = pad.t + ch * (1 - v / yMax);
                     ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI);
-                    ctx.fillStyle = "#3b82f6"; ctx.fill();
-                    ctx.strokeStyle = "#0d1117"; ctx.lineWidth = 2;
+                    ctx.fillStyle = "#c06a69"; ctx.fill();
+                    ctx.strokeStyle = "#121212"; ctx.lineWidth = 2;
                     ctx.stroke();
                 });
                 /* X 轴标签 */
-                ctx.fillStyle = "#8b949e"; ctx.font = "9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+                ctx.fillStyle = "#cbcbcb"; ctx.font = "9px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
                 var labelStep = Math.max(1, Math.floor(pts.length / 6));
                 for (var i = 0; i < pts.length; i++) {
                     if (i === 0 || i === pts.length - 1 || i % labelStep === 0) {
@@ -976,7 +1032,7 @@
                     }
                 }
                 /* X 轴线 */
-                ctx.strokeStyle = "rgba(48,54,61,0.6)"; ctx.lineWidth = 1;
+                ctx.strokeStyle = "rgba(203,203,203,0.18)"; ctx.lineWidth = 1;
                 ctx.beginPath(); ctx.moveTo(pad.l, pad.t + ch); ctx.lineTo(W - pad.r, pad.t + ch); ctx.stroke();
             })();
         }
@@ -1039,24 +1095,38 @@
         if (!key) { setStatus("请先输入 " + pc.name + " 的 Key", "err"); return; }
         setStatus("测试 " + pc.name + "...", "warn");
         var base = pc.base;
+        /* 用该厂商自己的模型测试，而非写死 deepseek-chat */
+        var testModel = "deepseek-chat";
+        for (var mi = 0; mi < MODEL_LIST.length; mi++) {
+            if (MODEL_PROVIDER_MAP[MODEL_LIST[mi]] === providerId) { testModel = MODEL_LIST[mi]; break; }
+        }
         var testBtn = document.querySelector('.prov-test-s[data-prov="' + providerId + '"]');
+        var card = testBtn ? testBtn.closest(".mk-card") : null;
+        function mark(state) { if (card) { card.classList.remove("ok", "err"); if (state) card.classList.add(state); } }
         if (testBtn) { testBtn.textContent = "···"; testBtn.classList.remove("ok"); }
+        mark(null);
         GM_xmlhttpRequest({
             method: "POST",
             url: base + "/chat/completions",
             headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
-            data: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "user", content: "ping" }], max_tokens: 5 }),
+            data: JSON.stringify({ model: testModel, messages: [{ role: "user", content: "ping" }], max_tokens: 5 }),
             timeout: 15000,
             onload: function(r) {
-                setStatus(pc.name + " ✓", "ok"); log(pc.name + " API 连接正常");
-                if (testBtn) { testBtn.textContent = "✓"; testBtn.classList.add("ok"); setTimeout(function() { testBtn.textContent = "测试"; testBtn.classList.remove("ok"); }, 2000); }
+                var ok = r.status >= 200 && r.status < 300;
+                if (ok) {
+                    setStatus(pc.name + " ✓", "ok"); log(pc.name + " API 连接正常"); mark("ok");
+                    if (testBtn) { testBtn.textContent = "✓"; setTimeout(function() { if (testBtn.textContent === "✓") testBtn.textContent = "测试"; }, 2000); }
+                } else {
+                    setStatus(pc.name + " 失败: " + r.status, "err"); log(pc.name + " API 测试失败: " + r.status); mark("err");
+                    if (testBtn) testBtn.textContent = "测试";
+                }
             },
             onerror: function(r) {
-                setStatus(pc.name + " 失败: " + r.status, "err"); log(pc.name + " API 测试失败: " + r.status);
+                setStatus(pc.name + " 连接失败: " + r.status, "err"); log(pc.name + " API 测试失败(网络/被拦截): " + r.status); mark("err");
                 if (testBtn) testBtn.textContent = "测试";
             },
             ontimeout: function() {
-                setStatus(pc.name + " 超时", "err"); log(pc.name + " API 测试超时");
+                setStatus(pc.name + " 超时", "err"); log(pc.name + " API 测试超时"); mark("err");
                 if (testBtn) testBtn.textContent = "测试";
             }
         });
@@ -1229,15 +1299,19 @@
 
             var baseUrl = getProviderBase(providerId);
 
-            var contentParts = [{ type: "text", text: "题目：" + qData.question }];
+            /* 纯文本用字符串 content（兼容 DeepSeek 等严格厂商）；带图才用数组 */
+            var textContent = "题目：" + qData.question;
             if (qData.options.length > 0) {
-                contentParts.push({ type: "text", text: "选项：\n" + qData.options.join("\n") });
+                textContent += "\n选项：\n" + qData.options.join("\n");
             }
-            contentParts.push({ type: "text", text: "题型：" + qData.question_type + "\n请给出正确答案。" });
+            textContent += "\n题型：" + qData.question_type + "\n请给出正确答案。";
 
             var imgPromises = qData.images.map(function(url) { return imgToBase64(url); });
             Promise.all(imgPromises).then(function(b64s) {
-                b64s.forEach(function(b64) { if (b64) contentParts.push({ type: "image_url", image_url: { url: b64 } }); });
+                var hasImg = false;
+                var contentParts = [{ type: "text", text: textContent }];
+                b64s.forEach(function(b64) { if (b64) { hasImg = true; contentParts.push({ type: "image_url", image_url: { url: b64 } }); } });
+                var userContent = hasImg ? contentParts : textContent;
 
             var req = GM_xmlhttpRequest({
                 method: "POST",
@@ -1247,7 +1321,7 @@
                     model: useModel,
                     messages: [
                         { role: "system", content: getSystemPrompt() },
-                        { role: "user", content: contentParts }
+                        { role: "user", content: userContent }
                     ],
                     max_tokens: MAX_TOKENS,
                     temperature: 0.3
@@ -1544,6 +1618,7 @@
         document.getElementById("cx-stop").disabled = false;
         isRunning = true;
         answeredCount = 0;
+        if (panel) panel.classList.add("running");
 
         var questions = scrapeAll();
         totalQuestions = questions.length;
@@ -1553,6 +1628,7 @@
             log("未找到题目");
             setStatus("未找到题目", "err");
             isRunning = false;
+            if (panel) panel.classList.remove("running");
             document.getElementById("cx-start").disabled = false;
             document.getElementById("cx-stop").disabled = true;
             return;
@@ -1575,12 +1651,14 @@
             try { GM_notification({ title: "学习通答题完成", text: "已完成 " + answeredCount + "/" + totalQuestions + " 题", timeout: 5000 }); } catch(e) {}
         }
         isRunning = false;
+        if (panel) panel.classList.remove("running");
         document.getElementById("cx-start").disabled = false;
         document.getElementById("cx-stop").disabled = true;
     }
 
     function stopAnswering() {
         isRunning = false;
+        if (panel) panel.classList.remove("running");
         if (currentRequest && typeof currentRequest.abort === "function") {
             try { currentRequest.abort(); } catch(e) {}
             currentRequest = null;
@@ -1699,7 +1777,7 @@
 
     // 控制台使用说明
     function showUsageGuide() {
-        console.log('%c📚 学习通自动答题助手 使用说明 v3.7.0', 'color: #165DFF; font-size: 18px; font-weight: bold; padding: 8px 0;');
+        console.log('%c📚 学习通自动答题助手 Next 使用说明 v' + VERSION, 'color: #165DFF; font-size: 18px; font-weight: bold; padding: 8px 0;');
         console.log('%c----------------------------------------', 'color: #E5E7EB;');
         
         console.group('%c🔧 核心功能', 'color: #36D399; font-size: 15px; font-weight: bold;');
@@ -1738,7 +1816,7 @@
     // 暴露快捷命令到页面控制台
     window.chaoxingHelp = showUsageGuide;
     window.chaoxingVersion = function() {
-        console.log('%c当前版本：v3.7.0', 'color: #165DFF; font-weight: bold;');
+        console.log('%c当前版本：v' + VERSION, 'color: #165DFF; font-weight: bold;');
     };
 
 })();
