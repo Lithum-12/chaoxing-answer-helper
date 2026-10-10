@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通自动答题助手 Next
 // @namespace    https://github.com/chaoxing-helper
-// @version      4.5.0
+// @version      4.6.2
 // @description  抓取学习通题目，调用 AI 自动答题
 // @author       chaoxing-helper
 // @match        *://*.chaoxing.com/*
@@ -36,10 +36,11 @@
 
 
     /* 脚本版本号：每次改动在此递增，并在 @version 头同步 */
-    var VERSION = "4.5.0";
+    var VERSION = "4.6.2";
 
     var DELAY_MS = parseInt(GM_getValue("cx_delay", 1500), 10);
     var MAX_TOKENS = parseInt(GM_getValue("cx_maxtokens", 2048), 10);
+    var TEMP = parseFloat(GM_getValue("cx_temp", 0.3));
     var isRunning = false;
     var answeredCount = 0;
     var totalQuestions = 0;
@@ -195,20 +196,30 @@
             "#cx-dot.ok{background:#28a745;}#cx-dot.warn{background:#ffc107;}#cx-dot.err{background:#e74c3c;}",
             "#cx-launcher.running #cx-dot{animation:cx-pulse 1.6s infinite;}",
             "@keyframes cx-pulse{0%{box-shadow:0 0 0 0 rgba(74,144,217,.5)}70%{box-shadow:0 0 0 8px rgba(74,144,217,0)}100%{box-shadow:0 0 0 0 rgba(74,144,217,0)}}",
-            "#cx-menu{display:none;width:200px;background:#fff;border:1px solid #e3e8ef;border-radius:12px;box-shadow:0 12px 34px rgba(0,0,0,.18);padding:10px;flex-direction:column;gap:6px;color:#333;}",
-            "#cx-launcher:hover #cx-menu,#cx-launcher.pinned #cx-menu{display:flex;animation:cx-menu-in .16s ease;}",
+            "#cx-menu{display:none;width:218px;background:#fff;border:1px solid #e6eaf0;border-radius:14px;box-shadow:0 14px 38px rgba(20,40,70,.18);padding:8px;color:#334;}",
+            "#cx-launcher:hover #cx-menu,#cx-launcher.pinned #cx-menu{display:block;animation:cx-menu-in .16s ease;}",
             "@keyframes cx-menu-in{from{opacity:0;transform:translateY(-6px)}}",
-            "#cx-status{font-size:12px;font-weight:600;color:#856404;padding:2px 4px 7px;border-bottom:1px solid #eef1f5;margin-bottom:2px;}#cx-status.ok{color:#155724;}#cx-status.warn{color:#856404;}#cx-status.err{color:#721c24;}",
-            "#cx-progress{font-size:11px;color:#8a94a6;padding:0 4px 6px;}",
-            ".cx-btn{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:1px solid #dfe4ea;background:#f7f9fc;color:#3a4250;border-radius:8px;padding:12px 8px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;}",
-            ".cx-btn svg{width:16px;height:16px;flex:none;display:block;}",
-            ".cx-btn:hover{border-color:#4A90D9;color:#357ABD;background:#eaf2fb;transform:translateX(2px);}",
-            ".cx-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;}",
-            ".cx-btn:disabled:hover{border-color:#dfe4ea;color:#3a4250;background:#f7f9fc;transform:none;}",
-            ".cx-btn.primary{background:#4A90D9;border-color:#4A90D9;color:#fff;}",
-            ".cx-btn.primary:hover{background:#357ABD;border-color:#357ABD;color:#fff;}",
-            ".cx-btn.danger{color:#e74c3c;border-color:#f2c4bd;background:#fdf3f2;}",
-            ".cx-btn.danger:hover:not(:disabled){background:#e74c3c;border-color:#e74c3c;color:#fff;}",
+            "#cx-menu .m-hd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px 8px;margin-bottom:4px;border-bottom:1px solid #eef1f5;}",
+            "#cx-menu .m-title{font-size:12.5px;font-weight:700;color:#2b3440;letter-spacing:.02em;}",
+            "#cx-menu .m-prog{font-size:11px;color:#8a94a6;font-variant-numeric:tabular-nums;}",
+            "#cx-status{display:block;padding:2px 8px 8px;font-size:11.5px;font-weight:600;color:#856404;}#cx-status.ok{color:#155724;}#cx-status.warn{color:#856404;}#cx-status.err{color:#721c24;}",
+            ".cx-btn{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:1px solid transparent;background:transparent;color:#3a4250;border-radius:10px;padding:7px 8px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;margin-bottom:2px;}",
+            ".cx-btn:last-child{margin-bottom:0;}",
+            ".cx-btn .b-ico{width:30px;height:30px;flex:none;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#eef3f9;color:#4A90D9;border:1px solid #e2e9f2;transition:.15s;}",
+            ".cx-btn .b-ico svg{width:16px;height:16px;display:block;}",
+            ".cx-btn:hover{background:#f2f6fb;border-color:#e2e9f2;}",
+            ".cx-btn:hover .b-ico{background:#4A90D9;color:#fff;border-color:#4A90D9;}",
+            ".cx-btn:active{transform:scale(.99);}",
+            ".cx-btn:disabled{opacity:.45;cursor:not-allowed;}",
+            ".cx-btn:disabled:hover{background:transparent;border-color:transparent;}",
+            ".cx-btn:disabled:hover .b-ico{background:#eef3f9;color:#4A90D9;border-color:#e2e9f2;}",
+            ".cx-btn.primary{color:#2b6cb0;}",
+            ".cx-btn.primary .b-ico{background:#4A90D9;color:#fff;border-color:#4A90D9;}",
+            ".cx-btn.primary:hover .b-ico{background:#357ABD;border-color:#357ABD;}",
+            ".cx-btn.danger{color:#c0392b;}",
+            ".cx-btn.danger .b-ico{background:#fdeceb;color:#e74c3c;border-color:#f6d7d4;}",
+            ".cx-btn.danger:hover:not(:disabled){background:#fdf3f2;border-color:#f6d7d4;}",
+            ".cx-btn.danger:hover:not(:disabled) .b-ico{background:#e74c3c;color:#fff;border-color:#e74c3c;}",
             "#cx-logbox{position:fixed;bottom:20px;right:20px;z-index:999998;width:320px;max-height:42vh;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35);font-family:var(--cx-sans);color-scheme:dark;display:none;flex-direction:column;overflow:hidden;}",
             "#cx-logbox.show{display:flex;}",
             "#cx-logbox .lb-hd{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#161b22;border-bottom:1px solid #21262d;font-size:13px;font-weight:700;}",
@@ -224,22 +235,37 @@
     }
 
     /* ===== 工具函数 ===== */
+    var LOG_BUFFER = [];
+    function makeLogLine(t, plain) {
+        var line = document.createElement("div");
+        line.innerHTML = '<span class="lb-time">[' + t + ']</span>';
+        line.appendChild(document.createTextNode(plain));
+        return line;
+    }
     function log(msg) {
         var plain = String(msg).replace(/<[^>]+>/g, "");
         var t = new Date().toLocaleTimeString();
         console.log("[学习通助手] " + plain);
         var fab = document.getElementById("cx-fab");
         if (fab) fab.setAttribute("title", "学习通答题助手 [" + t + "] " + plain);
+        LOG_BUFFER.push({ t: t, m: plain });
+        if (LOG_BUFFER.length > 300) LOG_BUFFER.shift();
+        /* 右下角浮窗 */
         var box = document.getElementById("cx-logbox");
-        if (!box) return;
-        var bd = box.querySelector(".lb-bd");
-        var line = document.createElement("div");
-        line.innerHTML = '<span class="lb-time">[' + t + ']</span>';
-        line.appendChild(document.createTextNode(plain));
-        bd.appendChild(line);
-        while (bd.children.length > 200) bd.removeChild(bd.firstChild);
-        box.classList.add("show");
-        bd.scrollTop = bd.scrollHeight;
+        if (box) {
+            var bd = box.querySelector(".lb-bd");
+            bd.appendChild(makeLogLine(t, plain));
+            while (bd.children.length > 300) bd.removeChild(bd.firstChild);
+            box.classList.add("show");
+            bd.scrollTop = bd.scrollHeight;
+        }
+        /* 控制台标签页 */
+        var cb = document.getElementById("cx-console-bd");
+        if (cb) {
+            cb.appendChild(makeLogLine(t, plain));
+            while (cb.children.length > 300) cb.removeChild(cb.firstChild);
+            cb.scrollTop = cb.scrollHeight;
+        }
     }
 
     function setStatus(text, type) {
@@ -252,7 +278,7 @@
 
     function updateProgress() {
         var el = document.getElementById("cx-progress");
-        if (el) el.textContent = "进度：" + answeredCount + " / " + totalQuestions;
+        if (el) el.textContent = answeredCount + " / " + totalQuestions;
         var b = document.getElementById("cx-badge");
         if (b) b.textContent = answeredCount + "/" + totalQuestions;
     }
@@ -312,12 +338,12 @@
                 '<span id="cx-dot" class="warn"></span>' +
             '</div>' +
             '<div id="cx-menu">' +
+                '<div class="m-hd"><span class="m-title">答题助手 Next</span><span class="m-prog" id="cx-progress">0 / 0</span></div>' +
                 '<div id="cx-status" class="warn">就绪</div>' +
-                '<div id="cx-progress">进度：0 / 0</div>' +
-                '<button id="cx-start" class="cx-btn primary" title="开始答题"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span>开始答题</span></button>' +
-                '<button id="cx-stop" class="cx-btn danger" disabled title="停止答题"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg><span>停止</span></button>' +
-                '<button id="cx-debug" class="cx-btn" title="调试题目识别"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg><span>调试</span></button>' +
-                '<button id="cx-stats" class="cx-btn" title="设置 / 统计"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7 7 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.74 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7 7 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96a7 7 0 0 0 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg><span>更多 / 设置</span></button>' +
+                '<button id="cx-start" class="cx-btn primary" title="开始答题"><span class="b-ico"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><span>开始答题</span></button>' +
+                '<button id="cx-stop" class="cx-btn danger" disabled title="停止答题"><span class="b-ico"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg></span><span>停止</span></button>' +
+                '<button id="cx-debug" class="cx-btn" title="调试题目识别"><span class="b-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></span><span>调试</span></button>' +
+                '<button id="cx-stats" class="cx-btn" title="设置 / 统计"><span class="b-ico"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94a7 7 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7 7 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7 7 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.74 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7 7 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96a7 7 0 0 0 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7 7 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg></span><span>更多 / 设置</span></button>' +
             '</div>';
 
         document.body.appendChild(panel);
@@ -496,21 +522,32 @@
                 "#cx-stats-modal .pb{padding:12px 14px}",
                 "#cx-stats-modal .sr{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .sr:last-child{border-bottom:none}",
-                "#cx-stats-modal .srr{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--cx-line-soft)}",
+                "#cx-stats-modal .srr{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:11px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .srr:last-child{border-bottom:none}",
-                "#cx-stats-modal .srr .d{font-size:12px;color:var(--cx-mut);margin-top:2px}",
-                "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:6px 10px;font-family:var(--cx-sans)}",
+                "#cx-stats-modal .srr .lab{font-size:13px;font-weight:600;color:var(--cx-ink)}",
+                "#cx-stats-modal .srr .d{font-size:11px;color:var(--cx-mut);margin-top:2px}",
+                "#cx-stats-modal .srr .rec{display:inline;color:var(--cx-alt-t);font-size:13px;margin-left:2px;cursor:help;vertical-align:baseline}",
+                "#cx-stats-modal .srr .ctl{flex:none;display:flex;align-items:center;gap:8px}",
+                "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:7px 10px;font-family:var(--cx-sans);font-size:13px}",
                 "#cx-stats-modal .srr select:focus,#cx-stats-modal .srr input:focus{border-color:var(--cx-brand);outline:none;box-shadow:0 0 0 3px var(--cx-brand-tint)}",
-                "#cx-stats-modal .srr select{min-width:180px}",
                 "#cx-stats-modal .srr input[type=number]{width:120px}",
                 "#cx-stats-modal .fx{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}",
-                "#cx-stats-modal button.bt{border:1px solid var(--cx-line);background:var(--cx-panel-deep);color:var(--cx-ink-2);border-radius:var(--cx-r-sm);padding:6px 12px;font-family:var(--cx-mono);font-size:12px;letter-spacing:.03em;cursor:pointer;transition:.18s}",
+                "#cx-stats-modal button.bt{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--cx-line);background:var(--cx-panel-deep);color:var(--cx-ink-2);border-radius:var(--cx-r-sm);padding:7px 13px;font-family:var(--cx-sans);font-size:12.5px;font-weight:600;cursor:pointer;transition:.16s}",
+                "#cx-stats-modal button.bt svg{width:14px;height:14px;display:block}",
                 "#cx-stats-modal button.bt:hover{color:var(--cx-brand-t);border-color:var(--cx-brand);background:var(--cx-brand-tint);transform:translateY(-1px)}",
-                "#cx-stats-modal button.bt.red{border-color:var(--cx-brand-line);color:var(--cx-brand-t)}",
-                "#cx-stats-modal button.bt.red:hover{background:var(--cx-brand);color:#fff;border-color:var(--cx-brand)}",
+                "#cx-stats-modal button.bt:active{transform:translateY(0)}",
+                "#cx-stats-modal button.bt.primary{background:var(--cx-brand);border-color:var(--cx-brand);color:#fff}",
+                "#cx-stats-modal button.bt.primary:hover{background:var(--cx-brand-t);border-color:var(--cx-brand-t);color:#fff}",
+                "#cx-stats-modal button.bt.ok{color:var(--cx-alt-t);border-color:var(--cx-alt-line)}",
+                "#cx-stats-modal button.bt.ok:hover{background:var(--cx-alt);border-color:var(--cx-alt);color:#fff}",
+                "#cx-stats-modal button.bt.red{color:var(--cx-pop-t);border-color:rgba(248,81,73,.45)}",
+                "#cx-stats-modal button.bt.red:hover{background:var(--cx-pop);border-color:var(--cx-pop);color:#fff}",
                 "#cx-stats-modal .qi{padding:10px 0;border-bottom:1px solid var(--cx-line-soft)}",
                 "#cx-stats-modal .qi:last-child{border-bottom:none}",
                 "#cx-stats-modal .qm{font-size:12px;color:var(--cx-mut);margin-top:4px}",
+                "#cx-stats-modal #cx-console-bd{height:540px;overflow-y:auto;padding:10px 14px;font-family:var(--cx-mono);font-size:12px;line-height:1.7;color:var(--cx-ink)}",
+                "#cx-stats-modal #cx-console-bd div{padding:2px 0;border-bottom:1px solid var(--cx-line-soft);word-break:break-all}",
+                "#cx-stats-modal #cx-console-bd .lb-time{color:var(--cx-mut);margin-right:6px}",
                 "#cx-stats-modal .ta{width:100%;min-height:100px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:10px;font-family:var(--cx-mono);font-size:12px;resize:vertical}",
                 "#cx-stats-modal table{width:100%;border-collapse:collapse;font-size:13px}",
                 "#cx-stats-modal th,#cx-stats-modal td{padding:8px;border-bottom:1px solid var(--cx-line-soft);text-align:left;color:var(--cx-ink-2)}",
@@ -574,7 +611,7 @@
             + '<div class="ni" data-tab="questions">题目导出</div>'
             + '<div class="ni" data-tab="models">模型配置</div>'
             + '<div class="ni" data-tab="settings">系统设置</div>'
-            + '<div class="ni" data-tab="help">使用说明</div>'
+            + '<div class="ni" data-tab="console">控制台</div>'
             + '<div class="ni" data-tab="info">脚本信息</div>'
             + '</div>'
             + '<div class="main">'
@@ -603,42 +640,51 @@
             + '<div class="tab" id="cx-tab-questions">'
             + '<div class="pn"><div class="ph">已保存题目（' + savedQs.length + '）</div><div class="pb">'
             + '<div class="fx">'
-            + '<button class="bt" id="cx-exp-json">JSON</button>'
-            + '<button class="bt" id="cx-exp-csv">CSV</button>'
-            + '<button class="bt" id="cx-exp-txt">TXT</button>'
-            + '<button class="bt" id="cx-exp-html" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t)">HTML</button>'
-            + '<button class="bt red" id="cx-clear-qs">清空</button>'
+            + '<span style="font-size:12px;color:var(--cx-mut);align-self:center;margin-right:2px">生成格式</span>'
+            + '<button class="bt" id="cx-exp-json"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>JSON</button>'
+            + '<button class="bt" id="cx-exp-csv"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>CSV</button>'
+            + '<button class="bt" id="cx-exp-txt"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>TXT</button>'
+            + '<button class="bt" id="cx-exp-html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M6 3h9l5 5v11a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>HTML</button>'
             + '</div>'
-            + '<textarea class="ta" id="cx-exp-box" placeholder="导出内容显示在这里"></textarea>'
+            + '<div class="fx">'
+            + '<span style="font-size:12px;color:var(--cx-mut);align-self:center;margin-right:2px">操作</span>'
+            + '<button class="bt primary" id="cx-exp-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>保存文件</button>'
+            + '<button class="bt" id="cx-exp-copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制</button>'
+            + '<button class="bt red" id="cx-clear-qs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>清空</button>'
+            + '</div>'
+            + '<textarea class="ta" id="cx-exp-box" placeholder="先点上方格式生成内容，再点「保存文件」下载或「复制」到剪贴板"></textarea>'
             + '<div style="margin-top:10px">' + questionRows + '</div>'
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-models">'
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="padding:8px 14px;font-size:13px">API Keys</div><div class="pb" style="padding:8px 14px">'
             + makeProviderKeyInputs()
-            + '<div class="fx" style="margin-top:8px"><button class="bt" id="cx-save-keys" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t);padding:4px 12px;font-size:12px">保存 Key</button></div>'
+            + '<div class="fx" style="margin-top:8px"><button class="bt primary" id="cx-save-keys">保存 Key</button></div>'
             + '</div></div>'
             + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型</div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
+            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">接口说明</div><div class="pb" style="padding:10px 14px;font-size:12px;line-height:1.8;color:var(--cx-mut)">'
+            + '• 本脚本按 <b style="color:var(--cx-ink)">OpenAI 兼容格式</b>（<code style="color:var(--cx-alt-t)">/chat/completions</code>）调用。<br>'
+            + '• DeepSeek / OpenAI / 通义千问 / 智谱 / 月之暗面 官方即兼容，可直接填官方 Key。<br>'
+            + '• <b style="color:var(--cx-pop-t)">Anthropic(Claude) / Google Gemini / MiniMax</b> 官方接口格式不同，官方直连会失败；如需使用请走 OpenAI 兼容聚合网关。<br>'
+            + '• 模型 ID 以你所用网关或官方实际支持为准。</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-settings">'
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="font-size:13px">系统参数</div><div class="pb">'
-            + '<div class="srr"><div><div>答题间隔</div><div class="d">单位毫秒</div></div><div><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
-            + '<div class="srr"><div><div>最大 Token</div><div class="d">单次请求上限</div></div><div><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
-            + '<div class="srr"><div><div>当前课程</div><div class="d">手动设置课程名</div></div><div><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="留空则自动检测" style="flex:1;min-width:120px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:6px 10px;font-size:13px" /></div></div>'
-            + '<div class="srr"><div><div>重置统计数据</div><div class="d">清空 token 用量与记录</div></div><div><button class="bt red" id="cx-reset-stats">重置</button></div></div>'
+            + '<div class="srr"><div><div class="lab">答题间隔 <span class="rec" title="建议 1500–3000 毫秒：太快容易被平台限流，太慢耗时">ⓘ</span></div><div class="d">答完一题后，等待多久再做下一题</div></div><div class="ctl"><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">最大 Token <span class="rec" title="建议 2048；简答题等长答案可提高到 4096">ⓘ</span></div><div class="d">AI 单次回答的最大长度，设太小答案会被截断</div></div><div class="ctl"><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">温度 Temperature <span class="rec" title="建议 0.3：数值越低回答越稳定确定，越高越发散有创意">ⓘ</span></div><div class="d">控制回答的随机性，答题建议用低值</div></div><div class="ctl"><input type="number" id="cx-s-temp" min="0" max="2" step="0.1" value="' + TEMP + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">当前课程 <span class="rec" title="留空则自动从页面标题识别课程名">ⓘ</span></div><div class="d">答题记录归到哪门课，可手动指定</div></div><div class="ctl"><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="自动检测" style="min-width:160px" /></div></div>'
+            + '<div class="srr"><div><div class="lab">恢复默认参数</div><div class="d">把间隔 / 最大 Token / 温度 改回初始值</div></div><div class="ctl"><button class="bt" id="cx-reset-defaults">恢复默认参数</button></div></div>'
+            + '<div class="srr"><div><div class="lab">重置统计数据</div><div class="d">清空 Token 用量与图表记录，不影响已保存的题目</div></div><div class="ctl"><button class="bt red" id="cx-reset-stats">重置统计</button></div></div>'
             + '</div></div>'
             + '<div class="pn"><div class="ph" style="font-size:13px">提示词设置</div><div class="pb">'
-            + '<textarea id="cx-s-prompt" style="width:100%;min-height:80px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:8px;font-size:12px;font-family:var(--cx-mono);resize:vertical;box-sizing:border-box">' + (GM_getValue("system_prompt", "") || getDefaultPrompt()).replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</textarea>'
-            + '<div class="fx" style="margin-top:6px"><button class="bt" id="cx-save-sprompt" style="background:var(--cx-brand-tint);border-color:var(--cx-brand);color:var(--cx-brand-t);padding:4px 12px;font-size:12px">保存提示词</button></div>'
+            + '<textarea id="cx-s-prompt" style="width:100%;min-height:90px;background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:8px;font-size:12px;font-family:var(--cx-mono);resize:vertical;box-sizing:border-box">' + (GM_getValue("system_prompt", "") || getDefaultPrompt()).replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</textarea>'
+            + '<div class="fx" style="margin-top:6px"><button class="bt primary" id="cx-save-sprompt">保存提示词</button><button class="bt" id="cx-reset-prompt">恢复默认提示词</button></div>'
             + '</div></div>'
             + '</div>'
-            + '<div class="tab" id="cx-tab-help">'
-            + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="font-size:13px">📖 使用说明</div><div class="pb" style="font-size:12px;line-height:1.8">'
-            + '<div style="margin-bottom:12px"><div style="color:var(--cx-brand-t);font-weight:600;margin-bottom:4px">🚀 快速开始</div><div style="color:var(--cx-ink)">① 打开学习通作业页面<br>② 右上角出现圆形悬浮按钮，悬停或点击向下展开菜单<br>③ 点「⚙ 更多」→「模型配置」填入 API Key<br>④ 回到悬浮按钮，点「▶ 开始」即可自动答题<br>⑤ 可随时点「■ 停止」中断答题进程</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:var(--cx-alt-t);font-weight:600;margin-bottom:4px">🔧 核心功能</div><div style="color:var(--cx-mut)">✅ 支持 8 家 AI 供应商（DeepSeek/OpenAI/Claude 等），按题型自动切换<br>✅ 智能识别课程/作业信息，支持手动修改<br>✅ 支持单选/多选/判断/填空/简答等全题型<br>✅ 答题记录自动保存，支持 JSON/CSV/TXT/HTML 导出<br>✅ Token 用量统计与可视化（环形图/折线图）</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:var(--cx-pop-t);font-weight:600;margin-bottom:4px">🤖 推荐模型</div><div style="color:var(--cx-mut);font-family:var(--cx-mono);font-size:11px">📍 DeepSeek: deepseek-chat (推荐), deepseek-reasoner, deepseek-v4-pro<br>📍 OpenAI: gpt-5.4, gpt-5.5-pro, gpt-6-sol<br>📍 Claude: claude-sonnet-4-5, claude-opus-5, claude-sonnet-5<br>📍 Gemini: gemini-2.5-pro, gemini-3.1-pro-preview<br>📍 通义千问: qwen3.6-plus, qwen-plus / 智谱GLM: glm-4.6, glm-5.3<br>📍 月之暗面: kimi-k2.6, kimi-k3 / MiniMax: MiniMax-M2.5</div></div>'
-            + '<div style="margin-bottom:12px"><div style="color:var(--cx-purple);font-weight:600;margin-bottom:4px">💡 使用技巧</div><div style="color:var(--cx-mut)">• 答题间隔建议 1500-3000ms，避免请求过快被限制<br>• 判断/单选题可用便宜模型，简答题用更强的模型<br>• 题目和答案会自动保存，可在「题目导出」中查看历史记录<br>• 点击「🐞 调试」按钮可预览题目识别，不自动填写<br>• 可在「系统设置」中修改提示词，引导 AI 生成更准答案</div></div>'
-            + '<div><div style="color:var(--cx-brand-t);font-weight:600;margin-bottom:4px">⚠️ 注意事项</div><div style="color:var(--cx-brand);font-size:11px">• 本脚本仅供个人学习交流，请遵守学校及平台相关规定<br>• API Key 仅保存在本地浏览器，不会上传到任何服务器<br>• 多选题请确认答案选项完整，避免漏选错选<br>• 建议先在练习题中测试，确认效果后再用于正式作业</div></div>'
+            + '<div class="tab" id="cx-tab-console">'
+            + '<div class="pn"><div class="ph" style="font-size:13px;display:flex;align-items:center;justify-content:space-between">🖥 控制台 · 运行日志<button class="bt" id="cx-console-clear" style="padding:3px 10px;font-size:11px">清空</button></div><div class="pb" style="padding:0">'
+            + '<div id="cx-console-bd"></div>'
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-info">'
@@ -652,6 +698,15 @@
             + '</div></div></div>';
 
         document.body.appendChild(modal);
+
+        /* 控制台页：填充历史日志缓冲 + 清空 */
+        var consoleBd = modal.querySelector("#cx-console-bd");
+        if (consoleBd) {
+            LOG_BUFFER.forEach(function(it) { consoleBd.appendChild(makeLogLine(it.t, it.m)); });
+            consoleBd.scrollTop = consoleBd.scrollHeight;
+            var cClear = modal.querySelector("#cx-console-clear");
+            if (cClear) cClear.onclick = function() { consoleBd.innerHTML = ""; LOG_BUFFER.length = 0; var lb = document.getElementById("cx-logbox"); if (lb) { var lbb = lb.querySelector(".lb-bd"); if (lbb) lbb.innerHTML = ""; } log("控制台已清空"); };
+        }
 
         function switchTab(tab) {
             modal.querySelectorAll(".ni").forEach(function(el) { el.classList.toggle("on", el.getAttribute("data-tab") === tab); });
@@ -667,6 +722,9 @@
         modal.addEventListener("click", function(e) { if (e.target === modal) modal.remove(); });
 
         var expBox = modal.querySelector("#cx-exp-box");
+        var lastFmt = "txt";
+        var FMT_EXT = { json: "json", csv: "csv", txt: "txt", html: "html" };
+        var FMT_MIME = { json: "application/json", csv: "text/csv", txt: "text/plain", html: "text/html" };
         function doExport(fmt) {
             if (!expBox) return;
             if (fmt === "json") {
@@ -678,10 +736,7 @@
                 }).join("\n");
                 expBox.value = header + rows;
             } else if (fmt === "html") {
-                var html = buildHTMLExport(savedQs, d);
-                downloadFile("学习通答题记录.html", html, "text/html");
-                log("HTML 文件已下载");
-                return;
+                expBox.value = buildHTMLExport(savedQs, d);
             } else {
                 expBox.value = savedQs.map(function(q, i) {
                     return "#" + (i + 1) + " [" + (q.type || "") + "]"
@@ -691,6 +746,7 @@
                         + "\n模型: " + (q.model || "") + "\n时间: " + (q.time || "") + "\n---";
                 }).join("\n");
             }
+            lastFmt = fmt;
             expBox.focus();
             expBox.select();
         }
@@ -800,6 +856,24 @@
         if (btnTxt) btnTxt.onclick = function() { doExport("txt"); };
         if (btnHtml) btnHtml.onclick = function() { doExport("html"); };
 
+        var saveBtn = modal.querySelector("#cx-exp-save");
+        if (saveBtn) saveBtn.onclick = function() {
+            if (!expBox || !expBox.value.trim()) { log("请先生成导出内容"); setStatus("请先生成内容", "warn"); return; }
+            downloadFile("学习通答题记录." + (FMT_EXT[lastFmt] || "txt"), expBox.value, FMT_MIME[lastFmt] || "text/plain");
+            log("已保存为 " + lastFmt.toUpperCase() + " 文件");
+            setStatus("文件已下载 ✓", "ok");
+        };
+        var copyBtn = modal.querySelector("#cx-exp-copy");
+        if (copyBtn) copyBtn.onclick = function() {
+            if (!expBox || !expBox.value.trim()) { log("暂无可复制内容"); setStatus("暂无内容", "warn"); return; }
+            expBox.focus(); expBox.select();
+            var ok = false;
+            try { ok = document.execCommand("copy"); } catch (e) {}
+            if (!ok && navigator.clipboard) { navigator.clipboard.writeText(expBox.value).then(function(){ setStatus("已复制 ✓", "ok"); log("导出内容已复制"); }, function(){ expBox.select(); setStatus("请手动 Ctrl+C 复制", "warn"); }); return; }
+            setStatus(ok ? "已复制 ✓" : "复制失败", ok ? "ok" : "err");
+            if (ok) log("导出内容已复制到剪贴板");
+        };
+
         var clearQsBtn = modal.querySelector("#cx-clear-qs");
         if (clearQsBtn) clearQsBtn.onclick = function() {
             if (!confirm("确定清空所有题目记录？")) return;
@@ -876,6 +950,16 @@
             log("最大 Token 已设为 " + v);
         });
 
+        var tempInput = modal.querySelector("#cx-s-temp");
+        if (tempInput) tempInput.addEventListener("change", function() {
+            var v = parseFloat(this.value);
+            if (isNaN(v)) return;
+            v = Math.max(0, Math.min(2, v));
+            TEMP = v;
+            GM_setValue("cx_temp", v);
+            log("温度已设为 " + v);
+        });
+
         var resetBtn = modal.querySelector("#cx-reset-stats");
         if (resetBtn) resetBtn.onclick = function() {
             if (!confirm("确定重置所有统计数据？")) return;
@@ -899,7 +983,28 @@
         var spBtn = modal.querySelector("#cx-save-sprompt");
         if (spBtn) spBtn.onclick = function() {
             var v = modal.querySelector("#cx-s-prompt").value.trim();
-            if (v) { GM_setValue("system_prompt", v); log("提示词已保存"); }
+            if (v) { GM_setValue("system_prompt", v); log("提示词已保存"); setStatus("提示词已保存 ✓", "ok"); }
+        };
+
+        /* 恢复默认提示词 */
+        var rpBtn = modal.querySelector("#cx-reset-prompt");
+        if (rpBtn) rpBtn.onclick = function() {
+            GM_setValue("system_prompt", "");
+            var ta = modal.querySelector("#cx-s-prompt");
+            if (ta) ta.value = getDefaultPrompt();
+            log("提示词已恢复默认");
+        };
+
+        /* 恢复默认参数（间隔 / 最大 Token / 温度） */
+        var rdBtn = modal.querySelector("#cx-reset-defaults");
+        if (rdBtn) rdBtn.onclick = function() {
+            if (!confirm("恢复默认参数？（间隔 1500ms / 最大 Token 2048 / 温度 0.3）")) return;
+            DELAY_MS = 1500; MAX_TOKENS = 2048; TEMP = 0.3;
+            GM_setValue("cx_delay", 1500); GM_setValue("cx_maxtokens", 2048); GM_setValue("cx_temp", 0.3);
+            log("参数已恢复默认");
+            modal.remove();
+            openStatsPage();
+            switchTab("settings");
         };
 
         /* 绘制图表 */
@@ -1324,7 +1429,7 @@
                         { role: "user", content: userContent }
                     ],
                     max_tokens: MAX_TOKENS,
-                    temperature: 0.3
+                    temperature: TEMP
                 }),
                 timeout: 60000,
                 onload: function(r) {
