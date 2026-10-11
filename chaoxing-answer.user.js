@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学习通自动答题助手 Next
 // @namespace    https://github.com/chaoxing-helper
-// @version      4.6.2
+// @version      4.6.3
 // @description  抓取学习通题目，调用 AI 自动答题
 // @author       chaoxing-helper
 // @match        *://*.chaoxing.com/*
@@ -36,7 +36,7 @@
 
 
     /* 脚本版本号：每次改动在此递增，并在 @version 头同步 */
-    var VERSION = "4.6.2";
+    var VERSION = "4.6.3";
 
     var DELAY_MS = parseInt(GM_getValue("cx_delay", 1500), 10);
     var MAX_TOKENS = parseInt(GM_getValue("cx_maxtokens", 2048), 10);
@@ -63,13 +63,13 @@
         /* DeepSeek */
         "deepseek-chat":"deepseek","deepseek-reasoner":"deepseek","deepseek-v3.2":"deepseek","deepseek-v4-pro":"deepseek","deepseek-v4-flash":"deepseek","deepseek-v41-flash":"deepseek",
         /* OpenAI GPT（5.5 及以上） */
-        "gpt-5.5":"openai","gpt-5.5-pro":"openai","gpt-5.6-sol":"openai","gpt-5.6-luna":"openai","gpt-6-sol":"openai","gpt-6-astra":"openai","gpt-6.1-sol":"openai",
+        "gpt-5.5":"openai","gpt-5.5-pro":"openai","gpt-5.6-sol":"openai","gpt-5.6-luna":"openai","gpt-6-sol":"openai","gpt-6-luna":"openai","gpt-6-astra":"openai","gpt-6.1-sol":"openai",
         /* Anthropic Claude（4.5 及以上，含 Fable 系列） */
         "claude-sonnet-4-5":"anthropic","claude-opus-4-5":"anthropic","claude-haiku-4-5":"anthropic","claude-sonnet-4-6":"anthropic","claude-opus-4-6":"anthropic","claude-opus-5":"anthropic","claude-opus-5-1":"anthropic","claude-sonnet-5":"anthropic","claude-sonnet-5-5":"anthropic","claude-haiku-5-5":"anthropic","claude-opus-5-5":"anthropic","claude-fable-5":"anthropic","claude-fable-5-1":"anthropic",
         /* Google Gemini */
         "gemini-2.5-pro":"google","gemini-2.5-flash":"google","gemini-3.1-pro-preview":"google","gemini-3.5-flash":"google","gemini-3.6-flash":"google","gemini-3.7-flash":"google","gemini-3.8-flash":"google",
-        /* 通义千问 Qwen（含 3.6 / 3.7 / 3.8 系列） */
-        "qwen3.6-plus":"qwen","qwen3.7-max":"qwen","qwen3.7-plus":"qwen","qwen3.8-max":"qwen","qwen-plus":"qwen","qwen-max":"qwen","qwen-turbo":"qwen",
+        /* 通义千问 Qwen（含 3.6 / 3.7 / 3.8 系列 + flash） */
+        "qwen3.6-plus":"qwen","qwen3.6-flash":"qwen","qwen3.7-max":"qwen","qwen3.7-plus":"qwen","qwen3.8-max":"qwen","qwen-plus":"qwen","qwen-max":"qwen","qwen-turbo":"qwen","qwen-flash":"qwen",
         /* 智谱 GLM */
         "glm-4.5":"zhipu","glm-4.6":"zhipu","glm-5":"zhipu","glm-5.2":"zhipu","glm-5.3":"zhipu","glm-5.3-flash":"zhipu",
         /* 月之暗面 Kimi / Moonshot */
@@ -691,7 +691,7 @@
             + '<div class="pn"><div class="ph" style="font-size:13px">ℹ️ 脚本信息</div><div class="pb" style="font-size:13px;line-height:1.9">'
             + '<div class="sr"><span style="color:var(--cx-mut)">名称</span><span style="color:var(--cx-ink);font-weight:600">学习通自动答题助手 Next</span></div>'
             + '<div class="sr"><span style="color:var(--cx-mut)">当前版本</span><span style="color:var(--cx-brand-t);font-weight:700">v' + VERSION + '</span></div>'
-            + '<div class="sr"><span style="color:var(--cx-mut)">项目地址</span><a href="https://github.com/long-0000/chaoxing-answer-helper" target="_blank" rel="noopener" style="color:var(--cx-brand-t);text-decoration:none">GitHub ↗</a></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">项目地址</span><a href="https://github.com/Lithum-12/chaoxing-answer-helper" target="_blank" rel="noopener" style="color:var(--cx-brand-t);text-decoration:none">GitHub ↗</a></div>'
             + '<div style="margin-top:12px;padding:10px 12px;background:var(--cx-panel-2);border:1px solid var(--cx-line-soft);border-radius:var(--cx-r-sm);color:var(--cx-mut);font-size:12px;line-height:1.8"><b style="color:var(--cx-pop-t)">免责声明：</b>本脚本仅供个人学习与技术研究使用，请遵守所在学校及超星平台的相关规定。API Key 仅保存在本地浏览器，不会上传到任何第三方服务器。因使用本脚本产生的一切后果由使用者自行承担。</div>'
             + '</div></div>'
             + '</div>'
