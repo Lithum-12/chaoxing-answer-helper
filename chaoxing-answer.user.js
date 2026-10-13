@@ -1688,10 +1688,18 @@
     /* ===== 答案清洗 ===== */
     function cleanAnswer(raw, qType) {
         var a = raw.trim();
-        if (qType === "单选题" || qType === "判断题") {
-            /* 单选/判断：只取第一个字母或关键词 */
-            var m = a.match(/^[A-D正确错误对错]/);
+        if (qType === "单选题") {
+            /* 单选：只取第一个字母 */
+            var m = a.match(/^[A-D]/);
             if (m) return m[0];
+        } else if (qType === "判断题") {
+            /* 判断：归一化为「正确 / 错误」，兼容 正/对/√/是/A/T 与 错/误/×/否/B/F */
+            var f = a.charAt(0);
+            if (/^[正对是A√✓]/i.test(a) || f === "T") return "正确";
+            if (/^[错否B×✗✘]/i.test(a) || f === "F" || f === "误") return "错误";
+            if (/正确|(^|[^错])对|√/.test(a) && !/错误|误|×/.test(a)) return "正确";
+            if (/错误|误|×/.test(a)) return "错误";
+            return a;
         } else if (qType === "多选题") {
             /* 多选：只取所有 ABCD 字母（忽略大小写） */
             var ms = a.toUpperCase().match(/[A-D]/g);
@@ -2023,7 +2031,8 @@
                 break;
             }
             case "判断题": {
-                var isTrue = a.indexOf("正确") !== -1 || a.indexOf("对") !== -1 || a === "A" || a.toLowerCase() === "true";
+                var al = a.toLowerCase();
+                var isTrue = /正确|(^|[^错])对|√|^正$|^对$|^是$|^a$|^true$|^t$/.test(a) || al === "a" || al === "true" || al === "t";
                 el.querySelectorAll(".answerBg, .Cy_ulTop li, .Zy_ulTop li").forEach(function(opt) {
                     var txt = opt.textContent;
                     if ((isTrue && (txt.indexOf("正确") !== -1 || txt.indexOf("对") !== -1)) ||
