@@ -1,9 +1,12 @@
 // ==UserScript==
 // @name         学习通自动答题助手 Next
-// @namespace    https://github.com/chaoxing-helper
-// @version      5.0.4
-// @description  抓取学习通题目，调用 AI 自动答题
-// @author       chaoxing-helper
+// @namespace    https://github.com/Lithum-12/chaoxing-answer-helper
+// @version      6.0.0
+// @description  抓取学习通作业 / 考试 / 章节测验题目，调用多家 AI 大模型自动作答。支持按题型选模型、逐题 / 会话 / 整卷批量模式、font-cxsecret 字体反爬解码、答题记录导入导出与 Token 用量统计，配可拖动悬浮工具球与实时日志。
+// @homepageURL  https://github.com/Lithum-12/chaoxing-answer-helper
+// @supportURL   https://github.com/Lithum-12/chaoxing-answer-helper/issues
+// @updateURL    https://cdn.jsdelivr.net/gh/Lithum-12/chaoxing-answer-helper@main/chaoxing-answer.user.js
+// @downloadURL  https://cdn.jsdelivr.net/gh/Lithum-12/chaoxing-answer-helper@main/chaoxing-answer.user.js
 // @match        *://*.chaoxing.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -18,6 +21,7 @@
 // @connect      open.bigmodel.cn
 // @connect      api.moonshot.cn
 // @connect      api.minimax.chat
+// @connect      cdn.jsdelivr.net
 // @inject-into  page
 // @noframes
 // @run-at       document-body
@@ -36,7 +40,7 @@
 
 
     /* 脚本版本号：每次改动在此递增，并在 @version 头同步 */
-    var VERSION = "5.0.4";
+    var VERSION = "6.0.0";
 
     var DELAY_MS = parseInt(GM_getValue("cx_delay", 1500), 10);
     var MAX_TOKENS = parseInt(GM_getValue("cx_maxtokens", 2048), 10);
@@ -44,6 +48,8 @@
     /* 答题模式：independent(逐题独立) | session(累积会话) | batch(整卷批量) */
     var SESSION_MODE = GM_getValue("cx_session_mode", "independent");
     var SESSION_MODEL = GM_getValue("cx_session_model", "deepseek-chat");
+    /* 整卷批量：即使一次拿到全部答案，也按答题间隔逐题填写（默认开，模拟人工、避免瞬间填完） */
+    var BATCH_STAGGER = GM_getValue("cx_batch_stagger", true) !== false;
     var SESSION = { messages: null };
     var isRunning = false;
     var answeredCount = 0;
@@ -73,7 +79,7 @@
         /* Google Gemini */
         "gemini-2.5-pro":"google","gemini-2.5-flash":"google","gemini-3.1-pro-preview":"google","gemini-3.5-flash":"google","gemini-3.6-flash":"google","gemini-3.7-flash":"google","gemini-3.8-flash":"google",
         /* 通义千问 Qwen（含 3.6 / 3.7 / 3.8 系列 + flash） */
-        "qwen3.6-plus":"qwen","qwen3.6-flash":"qwen","qwen3.7-max":"qwen","qwen3.7-plus":"qwen","qwen3.8-max":"qwen","qwen-plus":"qwen","qwen-max":"qwen","qwen-turbo":"qwen","qwen-flash":"qwen",
+        "qwen3.6-plus":"qwen","qwen3.6-flash":"qwen","qwen3.7-max":"qwen","qwen3.7-plus":"qwen","qwen3.7-flash":"qwen","qwen3.8-max":"qwen","qwen3.8-flash":"qwen","qwen-plus":"qwen","qwen-max":"qwen","qwen-turbo":"qwen","qwen-flash":"qwen",
         /* 智谱 GLM */
         "glm-4.5":"zhipu","glm-4.6":"zhipu","glm-5":"zhipu","glm-5.2":"zhipu","glm-5.3":"zhipu","glm-5.3-flash":"zhipu",
         /* 月之暗面 Kimi / Moonshot */
@@ -239,18 +245,38 @@
             "#cx-logbox .lb-bd .lb-time{color:#8b949e;margin-right:6px;}",
             ".cx-highlight{outline:2px solid #4A90D9 !important;outline-offset:2px;}",
             ".cx-done{outline:2px solid #28a745 !important;outline-offset:2px;}",
+            "#cx-tip{position:fixed;z-index:2147483647;max-width:260px;background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:7px 10px;font-size:12px;line-height:1.6;box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;opacity:0;transition:opacity .12s;white-space:normal;color-scheme:dark;}",
+            "#cx-tip.show{opacity:1;}",
+            "#cx-tip .tp-t{font-weight:700;margin-bottom:2px;}",
+            "#cx-tip .tp-r{display:flex;justify-content:space-between;gap:14px;}",
+            "#cx-tip .tp-r span:last-child{color:#8b949e;font-variant-numeric:tabular-nums;}",
         ].join(" ");
         document.head.appendChild(style);
     }
 
     /* ===== 工具函数 ===== */
     var LOG_BUFFER = [];
+    var LOGBOX_DISABLED = (function(){ try { return GM_getValue("cx_logbox_disabled", false) === true; } catch(e){ return false; } })();
     function makeLogLine(t, plain) {
         var line = document.createElement("div");
         line.innerHTML = '<span class="lb-time">[' + t + ']</span>';
         line.appendChild(document.createTextNode(plain));
         return line;
     }
+    /* 统一自绘浮窗：ⓘ 注释与图表 hover 共用 */
+    function showTip(html, x, y) {
+        var tip = document.getElementById("cx-tip");
+        if (!tip) { tip = document.createElement("div"); tip.id = "cx-tip"; document.body.appendChild(tip); }
+        tip.innerHTML = html;
+        tip.classList.add("show");
+        var r = tip.getBoundingClientRect();
+        var left = x + 14, top = y + 16;
+        if (left + r.width > window.innerWidth - 8) left = x - r.width - 12;
+        if (top + r.height > window.innerHeight - 8) top = y - r.height - 12;
+        tip.style.left = Math.max(8, left) + "px";
+        tip.style.top = Math.max(8, top) + "px";
+    }
+    function hideTip() { var tip = document.getElementById("cx-tip"); if (tip) tip.classList.remove("show"); }
     function log(msg) {
         var plain = String(msg).replace(/<[^>]+>/g, "");
         var t = new Date().toLocaleTimeString();
@@ -261,7 +287,7 @@
         if (LOG_BUFFER.length > 300) LOG_BUFFER.shift();
         /* 右下角浮窗 */
         var box = document.getElementById("cx-logbox");
-        if (box) {
+        if (box && !LOGBOX_DISABLED) {
             var bd = box.querySelector(".lb-bd");
             bd.appendChild(makeLogLine(t, plain));
             while (bd.children.length > 300) bd.removeChild(bd.firstChild);
@@ -576,7 +602,14 @@
                 "#cx-stats-modal .srr:last-child{border-bottom:none}",
                 "#cx-stats-modal .srr .lab{font-size:13px;font-weight:600;color:var(--cx-ink)}",
                 "#cx-stats-modal .srr .d{font-size:11px;color:var(--cx-mut);margin-top:2px}",
-                "#cx-stats-modal .rec{display:inline;color:var(--cx-alt-t);font-size:13px;margin-left:2px;cursor:help;vertical-align:baseline}",
+                "#cx-stats-modal .rec{display:inline;color:var(--cx-mut);font-size:12px;margin-left:3px;cursor:help;vertical-align:baseline;transition:color .15s}",
+                "#cx-stats-modal .rec:hover{color:var(--cx-brand-t)}",
+                "#cx-stats-modal .sw{position:relative;display:inline-block;width:46px;height:26px;flex:none;cursor:pointer}",
+                "#cx-stats-modal .sw input{position:absolute;left:0;top:0;width:100%;height:100%;margin:0;padding:0;background:transparent;border:none;opacity:0;cursor:pointer;z-index:2}",
+                "#cx-stats-modal .sw .sl{position:absolute;left:0;right:0;top:0;bottom:0;background:#2a3038;border:1px solid var(--cx-line);border-radius:26px;transition:background .22s,border-color .22s}",
+                "#cx-stats-modal .sw .sl:before{content:'';position:absolute;left:3px;top:50%;width:18px;height:18px;margin-top:-9px;border-radius:50%;background:#8b949e;transition:transform .22s,background .22s;box-shadow:0 1px 3px rgba(0,0,0,.4)}",
+                "#cx-stats-modal .sw input:checked + .sl{background:#4A90D9;border-color:#4A90D9}",
+                "#cx-stats-modal .sw input:checked + .sl:before{transform:translateX(20px);background:#fff}",
                 "#cx-stats-modal .srr .ctl{flex:none;display:flex;align-items:center;gap:8px}",
                 "#cx-stats-modal .srr select,#cx-stats-modal .srr input{background:var(--cx-panel-deep);color:var(--cx-ink);border:1px solid var(--cx-line);border-radius:var(--cx-r-sm);padding:7px 10px;font-family:var(--cx-sans);font-size:13px}",
                 "#cx-stats-modal .srr select:focus,#cx-stats-modal .srr input:focus{border-color:var(--cx-brand);outline:none;box-shadow:0 0 0 3px var(--cx-brand-tint)}",
@@ -653,12 +686,12 @@
         modal.id = "cx-stats-modal";
         modal.innerHTML = ''
             + '<div class="w">'
-            + '<div class="h"><div class="t">答题助手 Next · 控制台 v' + VERSION + '</div><button class="x" id="cx-sm-close">×</button></div>'
+            + '<div class="h"><div class="t">答题助手 Next v' + VERSION + '</div><button class="x" id="cx-sm-close">×</button></div>'
             + '<div class="b">'
             + '<div class="nav">'
             + '<div class="ni on" data-tab="dash">仪表盘</div>'
             + '<div class="ni" data-tab="token">Token 分析</div>'
-            + '<div class="ni" data-tab="questions">题目导出</div>'
+            + '<div class="ni" data-tab="questions">题目管理</div>'
             + '<div class="ni" data-tab="models">模型配置</div>'
             + '<div class="ni" data-tab="settings">系统设置</div>'
             + '<div class="ni" data-tab="console">控制台</div>'
@@ -700,6 +733,8 @@
             + '<span style="font-size:12px;color:var(--cx-mut);align-self:center;margin-right:2px">操作</span>'
             + '<button class="bt primary" id="cx-exp-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>保存文件</button>'
             + '<button class="bt" id="cx-exp-copy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制</button>'
+            + '<button class="bt" id="cx-imp-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>导入</button>'
+            + '<input type="file" id="cx-imp-file" accept="application/json,.json" style="display:none" />'
             + '<button class="bt red" id="cx-clear-qs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>清空</button>'
             + '</div>'
             + '<textarea class="ta" id="cx-exp-box" placeholder="先点上方格式生成内容，再点「保存文件」下载或「复制」到剪贴板"></textarea>'
@@ -707,12 +742,12 @@
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-models">'
-            + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="padding:8px 14px;font-size:13px">API Keys</div><div class="pb" style="padding:8px 14px">'
+            + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="padding:8px 14px;font-size:13px">API 密钥</div><div class="pb" style="padding:8px 14px">'
             + makeProviderKeyInputs()
             + '<div class="fx" style="margin-top:8px"><button class="bt primary" id="cx-save-keys">保存 Key</button></div>'
             + '</div></div>'
-            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型 <span class="rec" title="为每种题型分别指定模型；仅在“逐题独立”模式下生效。判断题/单选题可用便宜模型，简答题用更强的模型">ⓘ</span></div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
-            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">会话模型 <span class="rec" title="累积会话 / 整卷批量模式下整卷统一用这一个模型（缓存按模型分，需固定）">ⓘ</span></div><div class="pb" style="padding:8px 14px"><div class="ms-row"><span class="l">整卷统一</span><select id="cx-s-sessmodel">' + makeModelOptions(SESSION_MODEL) + '</select></div></div></div>'
+            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">按题型选择模型 <span class="rec" data-tip="为每种题型分别指定模型；仅在“逐题独立”模式下生效。判断题/单选题可用便宜模型，简答题用更强的模型">ⓘ</span></div><div class="pb" style="padding:8px 14px" id="cx-model-wrap">' + modelSelectHtml + '</div></div>'
+            + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">会话模型 <span class="rec" data-tip="累积会话 / 整卷批量模式下整卷统一用这一个模型（缓存按模型分，需固定）">ⓘ</span></div><div class="pb" style="padding:8px 14px"><div class="ms-row"><span class="l">整卷统一</span><select id="cx-s-sessmodel">' + makeModelOptions(SESSION_MODEL) + '</select></div></div></div>'
             + '<div class="pn"><div class="ph" style="padding:8px 14px;font-size:13px">接口说明</div><div class="pb" style="padding:10px 14px;font-size:12px;line-height:1.8;color:var(--cx-mut)">'
             + '• 本脚本按 <b style="color:var(--cx-ink)">OpenAI 兼容格式</b>（<code style="color:var(--cx-alt-t)">/chat/completions</code>）调用。<br>'
             + '• DeepSeek / OpenAI / 通义千问 / 智谱 / 月之暗面 官方即兼容，可直接填官方 Key。<br>'
@@ -721,11 +756,12 @@
             + '</div>'
             + '<div class="tab" id="cx-tab-settings">'
             + '<div class="pn" style="margin-bottom:8px"><div class="ph" style="font-size:13px">系统参数</div><div class="pb">'
-            + '<div class="srr"><div><div class="lab">答题间隔 <span class="rec" title="建议 1500–3000 毫秒：太快容易被平台限流，太慢耗时">ⓘ</span></div><div class="d">答完一题后，等待多久再做下一题</div></div><div class="ctl"><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
-            + '<div class="srr"><div><div class="lab">最大 Token <span class="rec" title="建议 2048；简答题等长答案可提高到 4096">ⓘ</span></div><div class="d">AI 单次回答的最大长度，设太小答案会被截断</div></div><div class="ctl"><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
-            + '<div class="srr"><div><div class="lab">温度 Temperature <span class="rec" title="建议 0.3：数值越低回答越稳定确定，越高越发散有创意">ⓘ</span></div><div class="d">控制回答的随机性，答题建议用低值</div></div><div class="ctl"><input type="number" id="cx-s-temp" min="0" max="2" step="0.1" value="' + TEMP + '"></div></div>'
-            + '<div class="srr"><div><div class="lab">答题模式 <span class="rec" title="逐题独立=每题新会话；累积会话=整卷共用一条对话，缓存命中高、风格统一；整卷批量=一次请求答完整卷。后两者锁定单一模型">ⓘ</span></div><div class="d">影响缓存命中率与跨题风格一致性</div></div><div class="ctl"><select id="cx-s-mode"><option value="independent"' + (SESSION_MODE === "independent" ? " selected" : "") + '>逐题独立</option><option value="session"' + (SESSION_MODE === "session" ? " selected" : "") + '>累积会话</option><option value="batch"' + (SESSION_MODE === "batch" ? " selected" : "") + '>整卷批量</option></select></div></div>'
-            + '<div class="srr"><div><div class="lab">当前课程 <span class="rec" title="留空则自动从页面标题识别课程名">ⓘ</span></div><div class="d">答题记录归到哪门课，可手动指定</div></div><div class="ctl"><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="自动检测" style="min-width:160px" /></div></div>'
+            + '<div class="srr"><div><div class="lab">答题间隔 <span class="rec" data-tip="建议 1500–3000 毫秒：太快容易被平台限流，太慢耗时">ⓘ</span></div><div class="d">答完一题后，等待多久再做下一题</div></div><div class="ctl"><input type="number" id="cx-s-delay" min="500" max="10000" step="100" value="' + DELAY_MS + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">最大 Token <span class="rec" data-tip="建议 2048；简答题等长答案可提高到 4096">ⓘ</span></div><div class="d">AI 单次回答的最大长度，设太小答案会被截断</div></div><div class="ctl"><input type="number" id="cx-s-maxtokens" min="256" max="8192" step="128" value="' + MAX_TOKENS + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">温度 Temperature <span class="rec" data-tip="建议 0.3：数值越低回答越稳定确定，越高越发散有创意">ⓘ</span></div><div class="d">控制回答的随机性，答题建议用低值</div></div><div class="ctl"><input type="number" id="cx-s-temp" min="0" max="2" step="0.1" value="' + TEMP + '"></div></div>'
+            + '<div class="srr"><div><div class="lab">批量逐题填写 <span class="rec" data-tip="整卷批量模式下，即使模型一次性返回全部答案，也按「答题间隔」逐题填入，模拟人工、避免瞬间填完。建议保持开启，非必要不要关闭。">ⓘ</span></div><div class="d">仅在「整卷批量」模式生效</div></div><div class="ctl"><label class="sw"><input type="checkbox" id="cx-s-batchstagger" ' + (BATCH_STAGGER ? "checked" : "") + ' /><span class="sl"></span></label></div></div>'
+            + '<div class="srr"><div><div class="lab">答题模式 <span class="rec" data-tip="逐题独立=每题新会话；累积会话=整卷共用一条对话，缓存命中高、风格统一；整卷批量=一次请求答完整卷。后两者锁定单一模型">ⓘ</span></div><div class="d">影响缓存命中率与跨题风格一致性</div></div><div class="ctl"><select id="cx-s-mode"><option value="independent"' + (SESSION_MODE === "independent" ? " selected" : "") + '>逐题独立</option><option value="session"' + (SESSION_MODE === "session" ? " selected" : "") + '>累积会话</option><option value="batch"' + (SESSION_MODE === "batch" ? " selected" : "") + '>整卷批量</option></select></div></div>'
+            + '<div class="srr"><div><div class="lab">当前课程 <span class="rec" data-tip="留空则自动从页面标题识别课程名">ⓘ</span></div><div class="d">答题记录归到哪门课，可手动指定</div></div><div class="ctl"><input type="text" id="cx-s-course" value="' + (GM_getValue("cx_last_course", "") || "").replace(/"/g,"&quot;") + '" placeholder="自动检测" style="min-width:160px" /></div></div>'
             + '<div class="srr"><div><div class="lab">恢复默认参数</div><div class="d">把间隔 / 最大 Token / 温度 改回初始值</div></div><div class="ctl"><button class="bt" id="cx-reset-defaults">恢复默认参数</button></div></div>'
             + '<div class="srr"><div><div class="lab">重置统计数据</div><div class="d">清空 Token 用量与图表记录，不影响已保存的题目</div></div><div class="ctl"><button class="bt red" id="cx-reset-stats">重置统计</button></div></div>'
             + '</div></div>'
@@ -735,15 +771,30 @@
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-console">'
-            + '<div class="pn"><div class="ph" style="font-size:13px;display:flex;align-items:center;justify-content:space-between">🖥 控制台 · 运行日志<button class="bt" id="cx-console-clear" style="padding:3px 10px;font-size:11px">清空</button></div><div class="pb" style="padding:0">'
+            + '<div class="pn"><div class="ph" style="font-size:13px;display:flex;align-items:center;justify-content:space-between">运行日志<span style="display:flex;gap:6px"><button class="bt" id="cx-console-clear" style="padding:3px 10px;font-size:11px">清屏</button><button class="bt" id="cx-logbox-toggle" style="padding:3px 10px;font-size:11px">' + (LOGBOX_DISABLED ? "开启迷你面板" : "关闭迷你面板") + '</button></span></div><div class="pb" style="padding:0">'
             + '<div id="cx-console-bd"></div>'
             + '</div></div>'
             + '</div>'
             + '<div class="tab" id="cx-tab-info">'
-            + '<div class="pn"><div class="ph" style="font-size:13px">ℹ️ 脚本信息</div><div class="pb" style="font-size:13px;line-height:1.9">'
+            + '<div class="pn"><div class="ph" style="font-size:13px">脚本信息</div><div class="pb" style="font-size:13px;line-height:1.9">'
             + '<div class="sr"><span style="color:var(--cx-mut)">名称</span><span style="color:var(--cx-ink);font-weight:600">学习通自动答题助手 Next</span></div>'
             + '<div class="sr"><span style="color:var(--cx-mut)">当前版本</span><span style="color:var(--cx-brand-t);font-weight:700">v' + VERSION + '</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">许可证</span><span style="color:var(--cx-ink)">MIT</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">已配置供应商</span><span style="color:var(--cx-ink)">' + (function(){ var n=0; for(var i=0;i<PROVIDER_ORDER.length;i++){ if(getProviderKey(PROVIDER_ORDER[i])) n++; } return n + " / " + PROVIDER_ORDER.length; })() + '</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">可用模型</span><span style="color:var(--cx-ink)">' + MODEL_LIST.length + ' 个</span></div>'
+            + '<div class="sr"><span style="color:var(--cx-mut)">答题模式</span><span style="color:var(--cx-ink)">' + (SESSION_MODE === "batch" ? "整卷批量" : (SESSION_MODE === "session" ? "累积会话" : "逐题独立")) + '</span></div>'
             + '<div class="sr"><span style="color:var(--cx-mut)">项目地址</span><a href="https://github.com/Lithum-12/chaoxing-answer-helper" target="_blank" rel="noopener" style="color:var(--cx-brand-t);text-decoration:none">GitHub ↗</a></div>'
+            + (function(){
+                var di = null; try { di = (typeof unsafeWindow !== "undefined" && unsafeWindow.__cxFontDecoderInfo) || window.__cxFontDecoderInfo || null; } catch (e) {}
+                if (di) {
+                    return '<div class="pn" style="margin-top:8px"><div class="ph" style="font-size:13px">扩展脚本信息</div><div class="pb" style="font-size:13px;line-height:1.9">'
+                        + '<div class="sr"><span style="color:var(--cx-mut)">字体解码器</span><span style="color:var(--cx-alt-t);font-weight:600">已安装 · v' + (di.version || "?") + '</span></div>'
+                        + '<div class="sr"><span style="color:var(--cx-mut)">字形映射表</span><span style="color:var(--cx-ink)">' + (di.entries || "?") + ' 条</span></div>'
+                        + '<div class="sr"><span style="color:var(--cx-mut)">状态</span><span style="color:var(--cx-ink)">' + (di.ready ? "就绪（可解码 font-cxsecret 加密题）" : "加载中") + '</span></div>'
+                        + '</div></div>';
+                }
+                return '<div class="sr"><span style="color:var(--cx-mut)">字体解码器</span><span style="color:var(--cx-pop-t)">未安装（课程内章节小测等加密页无法答题）</span></div>';
+            })()
             + '<div style="margin-top:12px;padding:10px 12px;background:var(--cx-panel-2);border:1px solid var(--cx-line-soft);border-radius:var(--cx-r-sm);color:var(--cx-mut);font-size:12px;line-height:1.8"><b style="color:var(--cx-pop-t)">免责声明：</b>本脚本仅供个人学习与技术研究使用，请遵守所在学校及超星平台的相关规定。API Key 仅保存在本地浏览器，不会上传到任何第三方服务器。因使用本脚本产生的一切后果由使用者自行承担。</div>'
             + '</div></div>'
             + '</div>'
@@ -751,13 +802,33 @@
 
         document.body.appendChild(modal);
 
+        /* ⓘ 注释与图表共用自绘浮窗 */
+        modal.addEventListener("mouseover", function(e) {
+            var t = e.target.closest && e.target.closest("[data-tip]");
+            if (t) showTip(t.getAttribute("data-tip"), e.clientX, e.clientY);
+        });
+        modal.addEventListener("mousemove", function(e) {
+            var t = e.target.closest && e.target.closest("[data-tip]");
+            if (t) showTip(t.getAttribute("data-tip"), e.clientX, e.clientY);
+            else if (!(e.target && e.target.tagName === "CANVAS")) hideTip();
+        });
+        modal.addEventListener("mouseleave", hideTip);
+
         /* 控制台页：填充历史日志缓冲 + 清空 */
         var consoleBd = modal.querySelector("#cx-console-bd");
         if (consoleBd) {
             LOG_BUFFER.forEach(function(it) { consoleBd.appendChild(makeLogLine(it.t, it.m)); });
             consoleBd.scrollTop = consoleBd.scrollHeight;
             var cClear = modal.querySelector("#cx-console-clear");
-            if (cClear) cClear.onclick = function() { consoleBd.innerHTML = ""; LOG_BUFFER.length = 0; var lb = document.getElementById("cx-logbox"); if (lb) { var lbb = lb.querySelector(".lb-bd"); if (lbb) lbb.innerHTML = ""; } log("控制台已清空"); };
+            if (cClear) cClear.onclick = function() { consoleBd.innerHTML = ""; LOG_BUFFER.length = 0; var lb = document.getElementById("cx-logbox"); if (lb) { var lbb = lb.querySelector(".lb-bd"); if (lbb) lbb.innerHTML = ""; } };
+            var lbToggle = modal.querySelector("#cx-logbox-toggle");
+            if (lbToggle) lbToggle.onclick = function() {
+                LOGBOX_DISABLED = !LOGBOX_DISABLED;
+                try { GM_setValue("cx_logbox_disabled", LOGBOX_DISABLED); } catch (e) {}
+                var lb = document.getElementById("cx-logbox");
+                if (LOGBOX_DISABLED) { if (lb) { lb.classList.remove("show"); } lbToggle.textContent = "开启迷你面板"; }
+                else { lbToggle.textContent = "关闭迷你面板"; if (lb && lb.querySelector(".lb-bd").children.length) lb.classList.add("show"); }
+            };
         }
 
         function switchTab(tab) {
@@ -936,6 +1007,51 @@
             switchTab("questions");
         };
 
+        /* 题目导入：读取之前导出的 JSON，合并入库 */
+        var impBtn = modal.querySelector("#cx-imp-btn");
+        var impFile = modal.querySelector("#cx-imp-file");
+        if (impBtn && impFile) {
+            impBtn.onclick = function() { impFile.click(); };
+            impFile.onchange = function() {
+                var file = impFile.files && impFile.files[0];
+                if (!file) return;
+                var reader = new FileReader();
+                reader.onload = function() {
+                    var parsed;
+                    try { parsed = JSON.parse(reader.result); } catch (e) { alert("导入失败：文件不是有效的 JSON"); return; }
+                    var arr = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.data) ? parsed.data : null);
+                    if (!arr) { alert("导入失败：未找到题目数组"); return; }
+                    var norm = arr.filter(function(it) { return it && (it.question || it.answer); }).map(function(it) {
+                        return {
+                            time: it.time || new Date().toLocaleString(),
+                            course: it.course || "", assignment: it.assignment || "",
+                            question: String(it.question || ""), options: Array.isArray(it.options) ? it.options : [],
+                            type: it.type || "", images: (typeof it.images === "number" ? it.images : (Array.isArray(it.images) ? it.images.length : 0)),
+                            answer: String(it.answer || ""), model: it.model || ""
+                        };
+                    });
+                    if (!norm.length) { alert("导入失败：没有可识别的题目"); return; }
+                    var list = GM_getValue("saved_questions", []);
+                    var seen = new Set(list.map(function(q) { return (q.course || "") + "|" + (q.question || "") + "|" + (q.answer || ""); }));
+                    var added = 0;
+                    norm.forEach(function(q) {
+                        var key = (q.course || "") + "|" + q.question + "|" + q.answer;
+                        if (seen.has(key)) return;
+                        seen.add(key); list.push(q); added++;
+                    });
+                    if (list.length > 2000) list = list.slice(-2000);
+                    GM_setValue("saved_questions", list);
+                    log("导入完成：新增 " + added + " 条（共 " + norm.length + " 条）");
+                    modal.remove();
+                    openStatsPage();
+                    switchTab("questions");
+                };
+                reader.onerror = function() { alert("导入失败：无法读取文件"); };
+                reader.readAsText(file);
+                impFile.value = "";
+            };
+        }
+
         /* API Keys 保存 & 测试 */
         var saveKeysBtn = modal.querySelector("#cx-save-keys");
         if (saveKeysBtn) saveKeysBtn.onclick = function() {
@@ -1010,6 +1126,13 @@
             TEMP = v;
             GM_setValue("cx_temp", v);
             log("温度已设为 " + v);
+        });
+
+        var bsInput = modal.querySelector("#cx-s-batchstagger");
+        if (bsInput) bsInput.addEventListener("change", function() {
+            BATCH_STAGGER = this.checked;
+            GM_setValue("cx_batch_stagger", BATCH_STAGGER);
+            log(BATCH_STAGGER ? "批量已设为按间隔逐题填写" : "批量已设为一次性填写（不建议关闭）");
         });
 
         /* 答题模式 */
@@ -1095,14 +1218,17 @@
                 if (total === 0) {
                     ctx.fillStyle = "#cbcbcb"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
                     ctx.fillText("暂无数据", cx, cy + 5);
+                    pieCanvas._hit = null;
                     return;
                 }
                 /* 外圈发光 */
                 ctx.shadowColor = "rgba(192,106,105,0.15)";
                 ctx.shadowBlur = 12;
                 var startAngle = -Math.PI / 2;
+                var slices = [];
                 data.forEach(function(d) {
                     var sliceAngle = (d.value / total) * 2 * Math.PI;
+                    slices.push({ a0: startAngle, a1: startAngle + sliceAngle, d: d, pct: ((d.value / total) * 100).toFixed(1) });
                     ctx.beginPath();
                     ctx.moveTo(cx + innerR * Math.cos(startAngle), cy + innerR * Math.sin(startAngle));
                     ctx.arc(cx, cy, outerR, startAngle, startAngle + sliceAngle);
@@ -1116,6 +1242,7 @@
                     startAngle += sliceAngle;
                 });
                 ctx.shadowBlur = 0;
+                pieCanvas._hit = { cx: cx, cy: cy, innerR: innerR, outerR: outerR, slices: slices, total: total };
                 /* 中心文字 */
                 ctx.fillStyle = "#fefefe"; ctx.font = "bold 18px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
                 ctx.fillText(total.toLocaleString(), cx, cy - 6);
@@ -1189,9 +1316,11 @@
                 });
                 ctx.stroke();
                 /* 数据点 */
+                lineCanvas._pts = [];
                 vals.forEach(function(v, i) {
                     var x = pad.l + i * stepX;
                     var y = pad.t + ch * (1 - v / yMax);
+                    lineCanvas._pts.push({ x: x, y: y, rec: pts[i], val: v, idx: i });
                     ctx.beginPath(); ctx.arc(x, y, 4, 0, 2 * Math.PI);
                     ctx.fillStyle = "#c06a69"; ctx.fill();
                     ctx.strokeStyle = "#121212"; ctx.lineWidth = 2;
@@ -1209,6 +1338,46 @@
                 ctx.strokeStyle = "rgba(203,203,203,0.18)"; ctx.lineWidth = 1;
                 ctx.beginPath(); ctx.moveTo(pad.l, pad.t + ch); ctx.lineTo(W - pad.r, pad.t + ch); ctx.stroke();
             })();
+
+            /* 绑定 hover 命中检测（仅一次） */
+            if (!pieCanvas._bound) {
+                pieCanvas.addEventListener("mousemove", function(e) {
+                    var hit = pieCanvas._hit; if (!hit) { hideTip(); return; }
+                    var rect = pieCanvas.getBoundingClientRect();
+                    var mx = (e.clientX - rect.left) * (pieCanvas.width / rect.width);
+                    var my = (e.clientY - rect.top) * (pieCanvas.height / rect.height);
+                    var dx = mx - hit.cx, dy = my - hit.cy, r = Math.sqrt(dx * dx + dy * dy);
+                    if (r < hit.innerR || r > hit.outerR) { hideTip(); return; }
+                    var ang = Math.atan2(dy, dx); if (ang < -Math.PI / 2) ang += 2 * Math.PI;
+                    var sl = null;
+                    for (var i = 0; i < hit.slices.length; i++) { if (ang >= hit.slices[i].a0 && ang < hit.slices[i].a1) { sl = hit.slices[i]; break; } }
+                    if (!sl) { hideTip(); return; }
+                    showTip('<div class="tp-t">' + sl.d.label + " Token</div>"
+                        + '<div class="tp-r"><span>数量</span><span>' + sl.d.value.toLocaleString() + "</span></div>"
+                        + '<div class="tp-r"><span>占比</span><span>' + sl.pct + "%</span></div>", e.clientX, e.clientY);
+                });
+                pieCanvas.addEventListener("mouseleave", hideTip);
+                pieCanvas._bound = true;
+            }
+            if (!lineCanvas._bound) {
+                lineCanvas.addEventListener("mousemove", function(e) {
+                    var pts = lineCanvas._pts; if (!pts || !pts.length) { hideTip(); return; }
+                    var rect = lineCanvas.getBoundingClientRect();
+                    var mx = (e.clientX - rect.left) * (lineCanvas.width / rect.width);
+                    var my = (e.clientY - rect.top) * (lineCanvas.height / rect.height);
+                    var best = null, bd = 12 * 12;
+                    for (var i = 0; i < pts.length; i++) { var ddx = pts[i].x - mx, ddy = pts[i].y - my, dd = ddx * ddx + ddy * ddy; if (dd < bd) { bd = dd; best = pts[i]; } }
+                    if (!best) { hideTip(); return; }
+                    var rec = best.rec || {};
+                    showTip('<div class="tp-t">第 ' + (best.idx + 1) + " 题</div>"
+                        + '<div class="tp-r"><span>输入</span><span>' + (rec.prompt || 0).toLocaleString() + "</span></div>"
+                        + '<div class="tp-r"><span>输出</span><span>' + (rec.completion || 0).toLocaleString() + "</span></div>"
+                        + '<div class="tp-r"><span>合计</span><span>' + best.val.toLocaleString() + "</span></div>"
+                        + (rec.model ? '<div class="tp-r"><span>模型</span><span>' + rec.model + "</span></div>" : ""), e.clientX, e.clientY);
+                });
+                lineCanvas.addEventListener("mouseleave", hideTip);
+                lineCanvas._bound = true;
+            }
         }
 
         /* 切到仪表盘时重绘图表 */
@@ -1321,62 +1490,148 @@
     }
 
     /* ===== 题目抓取 ===== */
+    /* ===== 跨同源 iframe 文档收集（脚本仅在顶层运行，主动递归进入同源 iframe） ===== */
+    function collectDocs() {
+        var docs = [document];
+        (function walk(doc) {
+            var frames;
+            try { frames = doc.querySelectorAll("iframe, frame"); } catch (e) { return; }
+            Array.prototype.forEach.call(frames, function(f) {
+                var d = null;
+                try { d = f.contentDocument || (f.contentWindow && f.contentWindow.document); } catch (e) { d = null; }
+                if (d && d !== doc && docs.indexOf(d) === -1) { docs.push(d); walk(d); }
+            });
+        })(document);
+        return docs;
+    }
+    function queryAllDeep(sel) {
+        var out = [];
+        collectDocs().forEach(function(d) {
+            try { Array.prototype.forEach.call(d.querySelectorAll(sel), function(el) { out.push(el); }); } catch (e) {}
+        });
+        return out;
+    }
+
     function getQuestionType(el) {
-        var cs = el.querySelector(".colorShallow");
-        if (cs) {
-            var t = cs.textContent;
-            if (t.indexOf("单选题") !== -1 || t.indexOf("A1") !== -1) return "单选题";
-            if (t.indexOf("多选题") !== -1 || t.indexOf("X型") !== -1) return "多选题";
-            if (t.indexOf("判断题") !== -1) return "判断题";
-            if (t.indexOf("填空题") !== -1) return "填空题";
-            if (t.indexOf("简答题") !== -1 || t.indexOf("论述题") !== -1 || t.indexOf("名词解释") !== -1 || t.indexOf("计算题") !== -1) return "简答题";
+        /* 1) 题型标签：newTiMu 的【单选题】在 .newZy_TItle；兼容 colorShallow / mark_name */
+        var labels = el.querySelectorAll(".newZy_TItle, .colorShallow, .mark_name");
+        for (var i = 0; i < labels.length; i++) {
+            var t = labels[i].textContent || "";
+            if (/单选|A1\s*型/.test(t)) return "单选题";
+            if (/多选|X\s*型/.test(t)) return "多选题";
+            if (/判断/.test(t)) return "判断题";
+            if (/填空/.test(t)) return "填空题";
+            if (/简答|论述|名词解释|计算|主观|问答/.test(t)) return "简答题";
         }
-        var mn = el.querySelector(".mark_name");
-        if (mn) {
-            var t = mn.textContent;
-            if (t.indexOf("单选题") !== -1) return "单选题";
-            if (t.indexOf("多选题") !== -1 || t.indexOf("X型题") !== -1) return "多选题";
-            if (t.indexOf("判断题") !== -1) return "判断题";
-            if (t.indexOf("填空题") !== -1) return "填空题";
-            if (t.indexOf("简答题") !== -1 || t.indexOf("论述题") !== -1) return "简答题";
+        /* 2) data / qtype 编码：.TiMu[data] 或 li[qtype] */
+        var timu = (el.classList && el.classList.contains("TiMu")) ? el : el.querySelector(".TiMu");
+        var code = timu ? timu.getAttribute("data") : null;
+        if (code == null) { var qe = el.querySelector("[qtype]"); if (qe) code = qe.getAttribute("qtype"); }
+        if (code != null && code !== "" && !isNaN(parseInt(code, 10))) {
+            var c = parseInt(code, 10);
+            if (c === 1) return "多选题";
+            if (c === 2) return "填空题";
+            if (c === 3) return "简答题";
+            if (c === 0) {
+                var lis = el.querySelectorAll(".Zy_ulTop li, .Cy_ulTop li");
+                if (lis.length === 2 && /对|错|正确|错误/.test(lis[0].textContent + lis[1].textContent)) return "判断题";
+                return "单选题";
+            }
         }
-        var radios = el.querySelectorAll('input[type="radio"]');
-        var checks = el.querySelectorAll('input[type="checkbox"]');
-        var tas = el.querySelectorAll("textarea");
-        if (checks.length > 0) return "多选题";
+        /* 3) 兜底：输入控件 */
+        if (el.querySelectorAll('input[type="checkbox"], [role="checkbox"]').length > 0) return "多选题";
+        var radios = el.querySelectorAll('input[type="radio"], [role="radio"]');
         if (radios.length > 0) return radios.length <= 2 ? "判断题" : "单选题";
+        var tas = el.querySelectorAll("textarea");
         if (tas.length > 0) return (el.textContent.indexOf("___") !== -1 || el.textContent.indexOf("（）") !== -1 || el.textContent.indexOf("()") !== -1) ? "填空题" : "简答题";
         return "未知";
     }
 
+    /* ===== 字体反爬解码：依赖配套解码器脚本 cx-font-decoder 暴露的 __cxFontDecode ===== */
+    var CX_FONT_URL = (typeof WeakMap !== "undefined") ? new WeakMap() : null;
+    function cxDecoder() {
+        try { if (typeof unsafeWindow !== "undefined" && unsafeWindow.__cxFontDecode) return unsafeWindow.__cxFontDecode; } catch (e) {}
+        if (window.__cxFontDecode) return window.__cxFontDecode;
+        return null;
+    }
+    function getSecFontUrl(doc) {
+        if (CX_FONT_URL && CX_FONT_URL.has(doc)) return CX_FONT_URL.get(doc);
+        var url = "";
+        try {
+            var styles = doc.querySelectorAll("style");
+            for (var i = 0; i < styles.length; i++) {
+                var t = styles[i].textContent || "";
+                var m = t.match(/font-cxsecret[^}]*?url\(\s*["']?(data:[^"')]+)/i);
+                if (m) { url = m[1]; break; }
+            }
+        } catch (e) {}
+        if (CX_FONT_URL) CX_FONT_URL.set(doc, url);
+        return url;
+    }
+    function elObfuscated(el) {
+        try { var d = el.ownerDocument || document; return !!(d.querySelector && d.querySelector(".font-cxsecret")); } catch (e) { return false; }
+    }
+    function cxDecode(el, text) {
+        if (!text) return text;
+        var dec = cxDecoder(); if (!dec) return text;
+        var url = getSecFontUrl(el.ownerDocument || document); if (!url) return text;
+        try { return dec(text, url); } catch (e) { return text; }
+    }
+    var DECODER_INSTALL_URL = "https://cdn.jsdelivr.net/gh/Lithum-12/chaoxing-answer-helper@main/cx-font-decoder.user.js";
+    var _decoderPrompted = false;
+    /* 检测到字体加密题但没装配套解码器时，提示安装 */
+    function checkDecoderMissing(questions) {
+        if (cxDecoder()) return false;
+        var obf = questions.some(function(q) { return elObfuscated(q.element); });
+        if (!obf) return false;
+        if (!_decoderPrompted) {
+            _decoderPrompted = true;
+            log("检测到字体加密题目，需安装配套「字体解码器」才能正确作答");
+            try {
+                GM_notification({
+                    title: "学习通助手：需要字体解码器",
+                    text: "本页题目被字体加密，请安装配套解码器脚本后刷新重试。",
+                    timeout: 8000
+                });
+            } catch (e) {}
+            if (confirm("检测到学习通字体加密题目，当前未安装配套「字体解码器」，无法正确读取题干。\n\n点「确定」打开发码器安装页面，安装后刷新本页再答题。")) {
+                try { GM_openInTab(DECODER_INSTALL_URL, { active: true }); } catch (e) { window.open(DECODER_INSTALL_URL, "_blank"); }
+            }
+        }
+        return true;
+    }
+
     function getQuestionText(el) {
-        var sels = [".Cy_TItle .clearfix", ".Zy_TItle", ".qtContent", "h3", ".mark_name"];
+        var sels = [".Zy_TItle", ".Cy_TItle .clearfix", ".qtContent", "h3", ".mark_name"];
         for (var i = 0; i < sels.length; i++) {
             var e = el.querySelector(sels[i]);
             if (e && e.textContent.trim()) {
-                var t = e.textContent.trim();
-                var b = e.querySelector(".colorShallow");
-                if (b) t = t.replace(b.textContent, "").trim();
-                return t;
+                var t = e.textContent.replace(/\s+/g, " ").trim();
+                var b = e.querySelector(".colorShallow, .newZy_TItle");
+                if (b) t = t.replace(b.textContent.replace(/\s+/g, " ").trim(), " ");
+                t = t.replace(/【[^】]*】/g, " ").replace(/^\s*\d+\s*[\.、\)）]?\s*/, "").trim();
+                if (t) return t;
             }
         }
-        return el.textContent.replace(/\s+/g, " ").trim();
+        return el.textContent.replace(/【[^】]*】/g, " ").replace(/\s+/g, " ").trim();
     }
 
     function getOptions(el) {
         var opts = [];
-        /* 如果是简答题、填空题，不抓选项 */
+        /* 简答题、填空题不抓选项 */
         var type = getQuestionType(el);
         if (type === "简答题" || type === "填空题") return opts;
         var items = el.querySelectorAll(".answerBg, .Zy_ulTop li, .Cy_ulTop li, .mark_letter li, .Zy_ulBottom li, .qtDetail li");
         if (items.length > 0) {
             items.forEach(function(it) {
                 var letter = it.querySelector(".num_option, .num_option_dx");
-                var text = it.querySelector(".answer_p, .ctTk, .ctKt");
+                var text = it.querySelector(".answer_p, .ctTk, .ctKt, a.after, .fl.after");
+                var lt = letter ? letter.textContent.trim() : "";
                 if (text && text.textContent.trim()) {
-                    opts.push((letter ? letter.textContent.trim() : "") + " " + text.textContent.trim());
+                    opts.push((lt ? lt + " " : "") + text.textContent.replace(/\s+/g, " ").trim());
                 } else if (it.textContent.trim()) {
-                    opts.push(it.textContent.trim());
+                    var full = it.textContent.replace(/\s+/g, " ").trim();
+                    opts.push(lt && full.indexOf(lt) !== 0 ? (lt + " " + full) : full);
                 }
             });
             if (opts.length > 0) return opts;
@@ -1401,9 +1656,9 @@
 
     function scrapeAll() {
         var items = [];
-        /* 优先用 questionLi，没有再用 TiMu */
-        var qlis = document.querySelectorAll(".questionLi");
-        var tmus = document.querySelectorAll(".TiMu");
+        /* 优先用 questionLi，没有再用 TiMu；跨同源 iframe 收集 */
+        var qlis = queryAllDeep(".questionLi");
+        var tmus = queryAllDeep(".TiMu");
         var seen = new Set();
         /* 收集所有 questionLi */
         qlis.forEach(function(el) {
@@ -1422,8 +1677,8 @@
             return {
                 index: i,
                 element: el,
-                question: getQuestionText(el) || ("第" + (i + 1) + "题"),
-                options: getOptions(el),
+                question: cxDecode(el, getQuestionText(el) || ("第" + (i + 1) + "题")),
+                options: getOptions(el).map(function(o) { return cxDecode(el, o); }),
                 question_type: getQuestionType(el),
                 images: extractImages(el)
             };
@@ -1440,7 +1695,7 @@
         } else if (qType === "多选题") {
             /* 多选：只取所有 ABCD 字母（忽略大小写） */
             var ms = a.toUpperCase().match(/[A-D]/g);
-            if (ms) { log("cleanAnswer 多选题: " + ms.join(",")); return ms.join(","); }
+            if (ms) { return ms.join(","); }
             log("cleanAnswer 多选题未匹配到字母，原始: " + a.substring(0, 50));
         } else if (qType === "填空题") {
             return a;
@@ -1719,10 +1974,12 @@
                     var txt = opt.textContent.trim();
                     if (txt.indexOf(letter) === 0 || txt.indexOf(letter + ".") === 0 || txt.indexOf(letter + "、") === 0) {
                         fireEvents(opt);
+                        try { opt.click(); } catch (e) {}
                         var radio = opt.querySelector('input[type="radio"]');
-                        if (radio) { radio.checked = true; fireEvents(radio); }
+                        if (radio) { radio.checked = true; fireEvents(radio); try { radio.click(); } catch (e) {} }
                         var label = opt.querySelector("label");
-                        if (label) fireEvents(label);
+                        if (label) { fireEvents(label); try { label.click(); } catch (e) {} }
+                        try { if (typeof unsafeWindow !== "undefined" && typeof unsafeWindow.$ !== "undefined") unsafeWindow.$(opt).trigger("click"); } catch(e){}
                     }
                 });
                 /* 后备：直接操作 radio */
@@ -1737,7 +1994,6 @@
             }
             case "多选题": {
                 var letters = a.toUpperCase().split(/[,，、\s]+/).filter(function(s) { return s; });
-                log("多选题答案: [" + letters.join(",") + "]");
                 letters.forEach(function(letter) {
                     /* 仿照单选题逻辑：按文本匹配选项容器 */
                     var options = el.querySelectorAll(".answerBg, .Cy_ulTop li, .Zy_ulTop li, .mark_letter li, .Zy_ulBottom li");
@@ -1751,7 +2007,7 @@
                             if (cb) { cb.checked = true; fireEvents(cb); }
                             var label = opt.querySelector("label");
                             if (label) { fireEvents(label); label.click(); }
-                            try { if (typeof unsafeWindow.$ !== "undefined") unsafeWindow.$(opt).trigger("click"); } catch(e){}
+                            try { if (typeof unsafeWindow !== "undefined" && typeof unsafeWindow.$ !== "undefined") unsafeWindow.$(opt).trigger("click"); } catch(e){}
                         }
                     });
                     /* 后备：按索引操作 */
@@ -1763,7 +2019,6 @@
                             }
                         });
                     }
-                    log("多选题 已选择 " + letter);
                 });
                 break;
             }
@@ -1774,10 +2029,12 @@
                     if ((isTrue && (txt.indexOf("正确") !== -1 || txt.indexOf("对") !== -1)) ||
                         (!isTrue && (txt.indexOf("错误") !== -1 || txt.indexOf("错") !== -1))) {
                         fireEvents(opt);
+                        try { opt.click(); } catch (e) {}
                         var radio = opt.querySelector('input[type="radio"]');
-                        if (radio) { radio.checked = true; fireEvents(radio); }
+                        if (radio) { radio.checked = true; fireEvents(radio); try { radio.click(); } catch (e) {} }
                         var label = opt.querySelector("label");
-                        if (label) fireEvents(label);
+                        if (label) { fireEvents(label); try { label.click(); } catch (e) {} }
+                        try { if (typeof unsafeWindow !== "undefined" && typeof unsafeWindow.$ !== "undefined") unsafeWindow.$(opt).trigger("click"); } catch(e){}
                     }
                 });
                 el.querySelectorAll('input[type="radio"]').forEach(function(r) {
@@ -1860,6 +2117,15 @@
             return;
         }
 
+        if (checkDecoderMissing(questions)) {
+            setStatus("需安装字体解码器", "err");
+            isRunning = false;
+            if (panel) panel.classList.remove("running");
+            document.getElementById("cx-start").disabled = false;
+            document.getElementById("cx-stop").disabled = true;
+            return;
+        }
+
         var modeLabel = SESSION_MODE === "batch" ? "整卷批量" : (SESSION_MODE === "session" ? "累积会话" : "逐题独立");
         log("找到 " + totalQuestions + " 题，开始答题（" + modeLabel + "）");
         setStatus("答题中...", "ok");
@@ -1880,6 +2146,7 @@
                     saveAnsweredQuestion(bq, bans, batchRes.model);
                     answeredCount++;
                     updateProgress();
+                    if (BATCH_STAGGER && bi < questions.length - 1) await sleep(DELAY_MS);
                 }
             } catch (e) {
                 log("批量答题失败: " + e.message);
@@ -1934,35 +2201,11 @@
 
     /* ===== 调试 ===== */
     function debugQuestions() {
-        log("===== 调试信息 =====");
-        var all = document.querySelectorAll(".questionLi, .TiMu");
-        log("原始匹配: " + all.length + " 个元素");
         var used = scrapeAll();
-        log("去重后: " + used.length + " 道题");
-        all.forEach(function(el, i) {
-            var hasQli = el.querySelector(".questionLi");
-            log("[" + i + "] " + (el.className || "").substring(0, 40) + (hasQli ? " [内含questionLi]" : ""));
-        });
+        log("调试：检测到 " + used.length + " 道题");
         used.forEach(function(q, i) {
-            log("题" + (i+1) + ": 题型=" + q.question_type + " 选项=" + q.options.length + " 图片=" + q.images.length);
+            log("题" + (i + 1) + " [" + q.question_type + "] 选项" + q.options.length + " 图" + q.images.length + (elObfuscated(q.element) ? " ·字体加密" : "") + " · " + (q.question || "").substring(0, 30));
         });
-        /* 分析每题的可输入元素 */
-        used.forEach(function(q, i) {
-            var el = q.element;
-            log("--- 题" + (i+1) + " 输入元素分析 ---");
-            var tas = el.querySelectorAll("textarea");
-            log("  textarea: " + tas.length + " 个");
-            tas.forEach(function(t, ti) { log("    [" + ti + "] id=" + (t.id||"无") + " name=" + (t.name||"无") + " display=" + (t.style.display||"默认") + " visible=" + (t.style.visibility||"默认")); });
-            var ifs = el.querySelectorAll("iframe");
-            log("  iframe: " + ifs.length + " 个");
-            ifs.forEach(function(f, fi) { log("    [" + fi + "] id=" + (f.id||"无") + " src=" + ((f.src||"").substring(0,60)||"无")); });
-            var ces = el.querySelectorAll('[contenteditable="true"]');
-            log("  contentEditable: " + ces.length + " 个");
-            ces.forEach(function(c, ci) { log("    [" + ci + "] id=" + (c.id||"无") + " class=" + ((c.className||"").substring(0,30)||"无")); });
-            var inputs = el.querySelectorAll('input[type="text"], input:not([type])');
-            log("  text输入框: " + inputs.length + " 个");
-        });
-        log("===== 调试结束 =====");
         setStatus("调试完成", "ok");
     }
 
@@ -1972,9 +2215,16 @@
         try {
             injectStyles();
             createPanel();
-            var n = document.querySelectorAll(".questionLi, .TiMu").length;
-            if (n > 0) { log("检测到 " + n + " 道题"); setStatus("已检测 " + n + " 题", "ok"); }
-            else { log("未检测到题目，请在考试/作业页面使用"); }
+            function scan(hint) {
+                var n = queryAllDeep(".questionLi, .TiMu").length;
+                if (n > 0) { log("检测到 " + n + " 道题" + (hint ? "（含 iframe）" : "")); setStatus("已检测 " + n + " 题", "ok"); }
+                else { log("未检测到题目，请在考试/作业页面使用"); }
+                return n;
+            }
+            if (scan(false) === 0) {
+                /* iframe 内容常异步加载，延迟再探测一次 */
+                setTimeout(function() { scan(true); }, 2000);
+            }
         } catch (e) {
             console.error("[学习通助手] 初始化失败:", e);
         }
@@ -1984,74 +2234,25 @@
     init();
     console.log("[学习通助手] 脚本初始化完成");
 
-    /* 监听统计页面的消息 */
-    window.addEventListener("message", function(ev) {
-        var data = ev.data || "";
-        if (data === "cx_reset_stats") {
-            var d = getUsage();
-            d.sessions = (d.sessions || 0) + 1;
-            d.prompt = 0;
-            d.completion = 0;
-            d.questions = 0;
-            d.total_questions = 0;
-            d.last_time = Date.now();
-            GM_setValue("cx_usage_data", d);
-            log("统计数据已重置");
-        } else if (data.indexOf("cx_set_delay:") === 0) {
-            var v = parseInt(data.split(":")[1], 10);
-            if (v > 0) { DELAY_MS = v; GM_setValue("cx_delay", v); log("答题间隔已设为 " + v + "ms"); }
-        } else if (data.indexOf("cx_set_model:") === 0) {
-            var m = data.split(":")[1];
-            GM_setValue("cx_model", m); log("模型已设为 " + m);
-        } else if (data.indexOf("cx_set_maxtokens:") === 0) {
-            var mt = parseInt(data.split(":")[1], 10);
-            if (mt > 0) { GM_setValue("cx_maxtokens", mt); log("最大 Token 已设为 " + mt); }
-        } else if (data.indexOf("cx_set_model_type:") === 0) {
-            var parts = data.split(":");
-            var typeName = parts[1];
-            var modelName = parts.slice(2).join(":");
-            if (typeName && modelName) {
-                GM_setValue("model_type_" + typeName, modelName);
-                TYPE_MODELS[typeName] = modelName;
-                log(typeName + " 模型已设为 " + modelName);
-            }
-        } else if (data === "cx_clear_questions") {
-            GM_setValue("saved_questions", []);
-            log("题目记录已清空");
-        } else if (data.indexOf("cx_save_api:") === 0) {
-            var parts = data.substring("cx_save_api:".length).split(":");
-            var key = parts[0];
-            var base = parts.slice(1).join(":");
-            if (key && key.length > 5) { GM_setValue("cx_key_deepseek", key); GM_setValue("deepseek_key", key); log("API Key 已更新"); }
-        } else if (data.indexOf("cx_test_key:") === 0) {
-            var testKey = data.substring("cx_test_key:".length);
-            if (testKey && testKey.length > 5) {
-                GM_setValue("cx_key_deepseek", testKey);
-                testProviderKey("deepseek");
-            } else {
-                log("测试失败: API Key 格式不正确");
-            }
-        }
-    });
-
     // 控制台使用说明
     function showUsageGuide() {
         console.log('%c📚 学习通自动答题助手 Next 使用说明 v' + VERSION, 'color: #165DFF; font-size: 18px; font-weight: bold; padding: 8px 0;');
         console.log('%c----------------------------------------', 'color: #E5E7EB;');
         
         console.group('%c🔧 核心功能', 'color: #36D399; font-size: 15px; font-weight: bold;');
-        console.log('%c✅ 支持10+AI供应商混合调用（DeepSeek/OpenAI/Anthropic等）', 'color: #333; line-height: 1.6;');
+        console.log('%c✅ 支持 8 家主流供应商（DeepSeek/OpenAI/Anthropic/Gemini/通义/智谱/Kimi/MiniMax）', 'color: #333; line-height: 1.6;');
         console.log('%c✅ 自动识别课程/作业信息，支持手动覆盖', 'color: #333; line-height: 1.6;');
-        console.log('%c✅ 单/多选题自动识别填写，适配多种页面结构', 'color: #333; line-height: 1.6;');
+        console.log('%c✅ 单/多/判断/填空/简答自动识别填写，兼容同源 iframe 与 newTiMu 页面', 'color: #333; line-height: 1.6;');
+        console.log('%c✅ 支持独立/会话/整卷批量三种模式，提升缓存命中与风格一致', 'color: #333; line-height: 1.6;');
         console.log('%c✅ 答题记录按课程>作业分类导出（JSON/CSV/TXT/HTML）', 'color: #333; line-height: 1.6;');
         console.log('%c✅ 答题统计可视化（环形图/折线图）', 'color: #333; line-height: 1.6;');
         console.groupEnd();
         
         console.group('%c📖 使用方法', 'color: #F59E0B; font-size: 15px; font-weight: bold;');
-        console.log('%c1. 配置API：打开统计面板 → API设置 → 填写对应供应商Key和模型', 'color: #333; line-height: 1.6;');
-        console.log('%c2. 启动答题：进入学习通作业页面 → 点击「开始答题」按钮', 'color: #333; line-height: 1.6;');
-        console.log('%c3. 查看统计：点击脚本图标 → 切换至统计面板', 'color: #333; line-height: 1.6;');
-        console.log('%c4. 导出记录：统计面板 → 选择导出格式 → 自动下载', 'color: #333; line-height: 1.6;');
+        console.log('%c1. 配置API：悬停右上角悬浮按钮 → 更多 → 模型配置 → 填写供应商 Key', 'color: #333; line-height: 1.6;');
+        console.log('%c2. 启动答题：进入学习通作业页面 → 悬停悬浮按钮 → 「开始答题」', 'color: #333; line-height: 1.6;');
+        console.log('%c3. 查看统计：悬停悬浮按钮 → 「更多」→ 仪表盘 / 控制台', 'color: #333; line-height: 1.6;');
+        console.log('%c4. 导出记录：更多 → 题目导出 → 选择格式 → 自动下载', 'color: #333; line-height: 1.6;');
         console.groupEnd();
         
         console.group('%c⚠️ 注意事项', 'color: #EF4444; font-size: 15px; font-weight: bold;');
